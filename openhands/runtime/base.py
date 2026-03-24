@@ -100,6 +100,10 @@ def _default_env_vars(sandbox_config: SandboxConfig) -> dict[str, str]:
             ret[sandbox_key] = os.environ[key]
     if sandbox_config.enable_auto_lint:
         ret['ENABLE_AUTO_LINT'] = 'true'
+    # Propagate LLM_ prefixed env vars to containers for config override
+    for key in os.environ:
+        if key.startswith('LLM_') and key not in ret:
+            ret[key] = os.environ[key]
     return ret
 
 
