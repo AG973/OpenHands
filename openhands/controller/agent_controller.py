@@ -40,7 +40,7 @@ from openhands.controller.stuck import StuckDetector
 from openhands.core.config import AgentConfig, LLMConfig
 from openhands.browser.browser_agent import BrowserAgent, BrowserAgentConfig
 from openhands.core.error_classifier import ClassifiedError, classify_error
-from openhands.core.heartbeat import HeartbeatConfig, HeartbeatMonitor, HeartbeatState
+from openhands.core.heartbeat import HeartbeatConfig, HeartbeatMonitor
 from openhands.core.reflexion_engine import ReflexionEngine
 from openhands.core.session_lifecycle import SessionLifecycle, SessionState
 from openhands.core.subagent import SubagentRegistry
@@ -1051,19 +1051,10 @@ class AgentController:
             )
             return
 
-        # ── Integration: heartbeat ──────────────────────────────────────
+        # ── Integration: heartbeat — record that the agent is alive ────
+        # Dead-agent detection is handled externally via start_monitor(),
+        # not inline here (beat + check back-to-back is always ACTIVE).
         self._heartbeat.beat(self.id)
-        hb_state = await self._heartbeat.check(self.id)
-        if hb_state == HeartbeatState.DEAD:
-            self.log(
-                'error',
-                'Heartbeat reports agent DEAD – stopping.',
-                extra={'msg_type': 'HEARTBEAT_DEAD'},
-            )
-            await self._react_to_exception(
-                RuntimeError('Agent heartbeat missed too many intervals')
-            )
-            return
 
         # ── Integration: pre-step plugin hook ─────────────────────────
         self._hook_runner.fire(
@@ -1236,7 +1227,17 @@ class AgentController:
 
         # ── Integration: feed action to tool loop detector ───────────
         action_type = type(action).__name__
-        self._tool_loop_detector.record(action_type)
+        action_args: dict[str, str] = {}
+        if hasattr(action, 'command'):
+            action_args['command'] = str(action.command)[:200]
+        elif hasattr(action, 'content'):
+            action_args['content'] = str(action.content)[:200]
+        elif hasattr(action, 'path'):
+            action_args['path'] = str(action.path)
+        self._tool_loop_detector.record(
+            action_type,
+            arguments=action_args if action_args else None,
+        )
 
         log_level = 'info' if LOG_ALL_EVENTS else 'debug'
         self.log(log_level, str(action), extra={'msg_type': 'ACTION'})
