@@ -287,6 +287,62 @@ def execute_server_management_operation(operation: str, params: dict[str, Any]) 
             result = {'message': f'Server {hostname} added to configuration'}
         elif operation == 'remove_server':
             result = {'message': f'Server {params.get("server_id", "")} removed from configuration'}
+        elif operation == 'configure_firewall':
+            rules = params.get('command', '')
+            if not rules:
+                result = {'message': 'Specify firewall rules via the command parameter (e.g., "ufw allow 22/tcp")'}
+            else:
+                result = ssh_execute(hostname, rules, username, port, ssh_key_path)
+        elif operation == 'vastai_create':
+            api_key = os.environ.get('VASTAI_API_KEY', '')
+            if not api_key:
+                result = {'error': 'VASTAI_API_KEY not set. Get your key at https://vast.ai/console/account/'}
+            else:
+                try:
+                    resp = requests.post(
+                        'https://console.vast.ai/api/v0/asks/',
+                        json={
+                            'disk_space': params.get('disk_size', 20),
+                            'image': params.get('docker_image', 'pytorch/pytorch:latest'),
+                            'gpu_name': params.get('gpu_type', 'RTX_4090'),
+                        },
+                        headers={'Authorization': f'Bearer {api_key}'},
+                        timeout=60,
+                    )
+                    result = resp.json()
+                except Exception as e:
+                    result = {'error': str(e)}
+        elif operation == 'vastai_list':
+            api_key = os.environ.get('VASTAI_API_KEY', '')
+            if not api_key:
+                result = {'error': 'VASTAI_API_KEY not set'}
+            else:
+                try:
+                    resp = requests.get(
+                        'https://console.vast.ai/api/v0/instances/',
+                        headers={'Authorization': f'Bearer {api_key}'},
+                        timeout=30,
+                    )
+                    result = resp.json()
+                except Exception as e:
+                    result = {'error': str(e)}
+        elif operation == 'vastai_terminate':
+            api_key = os.environ.get('VASTAI_API_KEY', '')
+            instance_id = params.get('instance_id', '')
+            if not api_key:
+                result = {'error': 'VASTAI_API_KEY not set'}
+            elif not instance_id:
+                result = {'error': 'instance_id is required'}
+            else:
+                try:
+                    resp = requests.delete(
+                        f'https://console.vast.ai/api/v0/instances/{instance_id}/',
+                        headers={'Authorization': f'Bearer {api_key}'},
+                        timeout=30,
+                    )
+                    result = resp.json() if resp.text else {'success': True, 'message': f'Instance {instance_id} terminated'}
+                except Exception as e:
+                    result = {'error': str(e)}
         else:
             result = {'error': f'Unknown server management operation: {operation}'}
 

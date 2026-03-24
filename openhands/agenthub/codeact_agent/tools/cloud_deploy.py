@@ -140,6 +140,10 @@ CloudDeployTool = ChatCompletionToolParam(
                     'type': 'string',
                     'description': 'Deployment or pod ID for status checks and management.',
                 },
+                'role_arn': {
+                    'type': 'string',
+                    'description': 'IAM execution role ARN for AWS Lambda deployment (or set AWS_LAMBDA_ROLE_ARN env var).',
+                },
             },
             'required': ['operation'],
         },

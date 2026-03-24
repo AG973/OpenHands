@@ -60,19 +60,38 @@ def aws_deploy_s3(project_path: str, service_name: str, region: str = 'us-east-1
     }
 
 
-def aws_deploy_lambda(project_path: str, service_name: str, region: str = 'us-east-1') -> dict[str, Any]:
+def aws_deploy_lambda(project_path: str, service_name: str, region: str = 'us-east-1',
+                      role_arn: str = '') -> dict[str, Any]:
     """Deploy a function to AWS Lambda."""
     if not _check_cli('aws'):
         return {'error': 'AWS CLI not installed. Run: pip install awscli'}
+
+    # Resolve IAM role ARN (required by AWS Lambda)
+    if not role_arn:
+        role_arn = os.environ.get('AWS_LAMBDA_ROLE_ARN', '')
+    if not role_arn:
+        return {
+            'error': 'Lambda execution role ARN is required.',
+            'instructions': [
+                'Provide role_arn parameter, or',
+                'Set AWS_LAMBDA_ROLE_ARN environment variable',
+                'Example: arn:aws:iam::123456789012:role/lambda-execution-role',
+            ],
+        }
+
     # Create zip of project
     zip_path = f'/tmp/{service_name}.zip'
-    _run_command(['zip', '-r', zip_path, '.'], timeout=60, cwd=project_path)
+    zip_result = _run_command(['zip', '-r', zip_path, '.'], timeout=60, cwd=project_path)
+    if not zip_result.get('success'):
+        return {'error': f'Failed to create zip archive: {zip_result.get("stderr", zip_result.get("error", ""))}'}
+
     result = _run_command([
         'aws', 'lambda', 'create-function',
         '--function-name', service_name,
         '--runtime', 'python3.11',
         '--handler', 'handler.handler',
         '--zip-file', f'fileb://{zip_path}',
+        '--role', role_arn,
         '--region', region,
     ])
     if result.get('success'):
@@ -205,7 +224,7 @@ def execute_cloud_deploy_operation(operation: str, params: dict[str, Any]) -> tu
         if operation == 'aws_deploy_s3':
             result = aws_deploy_s3(project_path, service_name, region)
         elif operation == 'aws_deploy_lambda':
-            result = aws_deploy_lambda(project_path, service_name, region)
+            result = aws_deploy_lambda(project_path, service_name, region, params.get('role_arn', ''))
         elif operation == 'aws_configure':
             result = {'message': 'Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables, then run: aws configure'}
         elif operation == 'gcp_deploy_cloud_run':
