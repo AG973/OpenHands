@@ -110,7 +110,6 @@ def _default_env_vars(sandbox_config: SandboxConfig) -> dict[str, str]:
         'LLM_MODIFY_PARAMS',
         'LLM_NUM_RETRIES',
         'LLM_TIMEOUT',
-        'LLM_STREAM',
         'LLM_DISABLE_STOP_WORD',
         'LLM_CACHING_PROMPT',
         'LLM_REASONING_EFFORT',
