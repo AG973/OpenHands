@@ -36,6 +36,7 @@ export default [
     route("servers", "routes/servers.tsx"),
     route("gpu-hub", "routes/gpu-hub.tsx"),
     route("mobile-testing", "routes/mobile-testing.tsx"),
+    route("github-operations", "routes/github-ops.tsx"),
   ]),
   // Shared routes that don't require authentication
   route(

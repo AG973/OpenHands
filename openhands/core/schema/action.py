@@ -107,3 +107,21 @@ class ActionType(str, Enum):
 
     LOOP_RECOVERY = 'loop_recovery'
     """Recover dead loop."""
+
+    GITHUB = 'github'
+    """Interact with GitHub: search repos, read code, create PRs, manage branches."""
+
+    CLOUD_DEPLOY = 'cloud_deploy'
+    """Deploy applications to AWS, GCP, Azure, RunPod, and other cloud platforms."""
+
+    DISCORD = 'discord'
+    """Interact with Discord: send messages, manage channels, webhooks, bots."""
+
+    MOBILE_BUILD = 'mobile_build'
+    """Build mobile applications using React Native and Expo."""
+
+    WEBSITE_BUILD = 'website_build'
+    """Build websites and web applications using modern frameworks."""
+
+    SERVER_MANAGEMENT = 'server_management'
+    """Manage servers, SSH connections, and cloud GPU instances."""

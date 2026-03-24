@@ -21,6 +21,14 @@ from openhands.events.observation.files import (
     FileReadObservation,
     FileWriteObservation,
 )
+from openhands.events.observation.github import (
+    CloudDeployObservation,
+    DiscordObservation,
+    GitHubObservation,
+    MobileBuildObservation,
+    ServerManagementObservation,
+    WebsiteBuildObservation,
+)
 from openhands.events.observation.loop_recovery import LoopDetectionObservation
 from openhands.events.observation.mcp import MCPObservation
 from openhands.events.observation.observation import Observation
@@ -52,4 +60,10 @@ __all__ = [
     'MCPObservation',
     'FileDownloadObservation',
     'TaskTrackingObservation',
+    'GitHubObservation',
+    'CloudDeployObservation',
+    'DiscordObservation',
+    'MobileBuildObservation',
+    'WebsiteBuildObservation',
+    'ServerManagementObservation',
 ]

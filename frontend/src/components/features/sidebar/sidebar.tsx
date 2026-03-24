@@ -24,6 +24,7 @@ import {
   Server as LucideServer,
   Cpu as LucideCpu,
   Bug as LucideBug,
+  GitBranch as LucideGitBranch,
 } from "lucide-react";
 
 export function Sidebar() {
@@ -113,6 +114,7 @@ export function Sidebar() {
               { path: "/servers", icon: <LucideServer className="w-[18px] h-[18px]" />, label: "Servers" },
               { path: "/gpu-hub", icon: <LucideCpu className="w-[18px] h-[18px]" />, label: "GPU" },
               { path: "/mobile-testing", icon: <LucideBug className="w-[18px] h-[18px]" />, label: "Testing" },
+              { path: "/github-operations", icon: <LucideGitBranch className="w-[18px] h-[18px]" />, label: "GitHub" },
             ].map((item) => (
               <button
                 key={item.path}

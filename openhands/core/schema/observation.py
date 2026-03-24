@@ -68,3 +68,21 @@ class ObservationType(str, Enum):
 
     LOOP_DETECTION = 'loop_detection'
     """Results of a dead-loop detection"""
+
+    GITHUB = 'github'
+    """Result of a GitHub operation (search, read code, create PR, etc.)"""
+
+    CLOUD_DEPLOY = 'cloud_deploy'
+    """Result of a cloud deployment operation"""
+
+    DISCORD = 'discord'
+    """Result of a Discord operation"""
+
+    MOBILE_BUILD = 'mobile_build'
+    """Result of a mobile app build operation"""
+
+    WEBSITE_BUILD = 'website_build'
+    """Result of a website build operation"""
+
+    SERVER_MANAGEMENT = 'server_management'
+    """Result of a server management operation"""

@@ -22,12 +22,19 @@ if TYPE_CHECKING:
 import openhands.agenthub.codeact_agent.function_calling as codeact_function_calling
 from openhands.agenthub.codeact_agent.tools.bash import create_cmd_run_tool
 from openhands.agenthub.codeact_agent.tools.browser import BrowserTool
+from openhands.agenthub.codeact_agent.tools.cloud_deploy import CloudDeployTool
 from openhands.agenthub.codeact_agent.tools.condensation_request import (
     CondensationRequestTool,
 )
+from openhands.agenthub.codeact_agent.tools.discord_integration import DiscordTool
 from openhands.agenthub.codeact_agent.tools.finish import FinishTool
+from openhands.agenthub.codeact_agent.tools.github import GitHubTool
 from openhands.agenthub.codeact_agent.tools.ipython import IPythonTool
 from openhands.agenthub.codeact_agent.tools.llm_based_edit import LLMBasedFileEditTool
+from openhands.agenthub.codeact_agent.tools.mobile_build import MobileBuildTool
+from openhands.agenthub.codeact_agent.tools.server_management import (
+    ServerManagementTool,
+)
 from openhands.agenthub.codeact_agent.tools.str_replace_editor import (
     create_str_replace_editor_tool,
 )
@@ -35,6 +42,7 @@ from openhands.agenthub.codeact_agent.tools.task_tracker import (
     create_task_tracker_tool,
 )
 from openhands.agenthub.codeact_agent.tools.think import ThinkTool
+from openhands.agenthub.codeact_agent.tools.website_build import WebsiteBuildTool
 from openhands.controller.agent import Agent
 from openhands.controller.state.state import State
 from openhands.core.config import AgentConfig
@@ -158,6 +166,15 @@ class CodeActAgent(Agent):
                     runtime_type=self.config.runtime,
                 )
             )
+
+        # Agent capability tools — always enabled
+        tools.append(GitHubTool)
+        tools.append(CloudDeployTool)
+        tools.append(DiscordTool)
+        tools.append(MobileBuildTool)
+        tools.append(WebsiteBuildTool)
+        tools.append(ServerManagementTool)
+
         return tools
 
     def reset(self) -> None:
