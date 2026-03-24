@@ -131,7 +131,11 @@ def clone_repo(repo: str, clone_path: str = '') -> dict[str, Any]:
     except subprocess.TimeoutExpired:
         return {'error': 'Clone timed out after 120 seconds'}
     except Exception as e:
-        return {'error': str(e)}
+        # Sanitize exception message to avoid leaking tokens
+        err_msg = str(e)
+        if token and token in err_msg:
+            err_msg = err_msg.replace(token, '***')
+        return {'error': err_msg}
 
 
 def create_branch(repo: str, branch: str, base_branch: str = '') -> dict[str, Any]:
