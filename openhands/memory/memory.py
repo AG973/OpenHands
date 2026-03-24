@@ -17,6 +17,16 @@ from openhands.events.observation.agent import (
 from openhands.events.observation.empty import NullObservation
 from openhands.events.recall_type import RecallType
 from openhands.events.stream import EventStream, EventStreamSubscriber
+from openhands.memory.context_engine import (
+    DefaultContextEngine,
+)
+from openhands.memory.persistent_memory import (
+    MemoryType,
+    PersistentMemory,
+)
+from openhands.memory.vector_memory import (
+    VectorMemory,
+)
 from openhands.microagent import (
     BaseMicroagent,
     KnowledgeMicroagent,
@@ -25,6 +35,8 @@ from openhands.microagent import (
 )
 from openhands.runtime.base import Runtime
 from openhands.runtime.runtime_status import RuntimeStatus
+from openhands.skills.skill_loader import SkillLoader
+from openhands.skills.skill_registry import SkillRegistry
 from openhands.utils.prompt import (
     ConversationInstructions,
     RepositoryInfo,
@@ -76,6 +88,35 @@ class Memory:
         self.repository_info: RepositoryInfo | None = None
         self.runtime_info: RuntimeInfo | None = None
         self.conversation_instructions: ConversationInstructions | None = None
+
+        # ── Integration: Persistent memory (SQLite + FTS5) ────────────────
+        persistent_dir = os.path.join(str(Path.home()), '.openhands', 'memory')
+        self.persistent_memory = PersistentMemory(
+            workspace_id=self.sid,
+            memory_dir=persistent_dir,
+        )
+        logger.info(
+            'Persistent memory initialized for session %s (%d entries)',
+            self.sid,
+            self.persistent_memory.stats()['total_entries'],
+        )
+
+        # ── Integration: Skills registry ──────────────────────────────────
+        self.skill_registry = SkillRegistry()
+        self._load_skills()
+
+        # ── Integration: Context engine (token budget + compaction) ───────
+        self.context_engine = DefaultContextEngine()
+        self.context_engine.bootstrap(session_id=self.sid)
+        logger.info('Context engine bootstrapped for session %s', self.sid)
+
+        # ── Integration: Vector memory (semantic search + embeddings) ─────
+        self.vector_memory = VectorMemory()
+        logger.info(
+            'Vector memory initialized for session %s (%d entries)',
+            self.sid,
+            self.vector_memory.stats()['total_entries'],
+        )
 
         # Load global microagents (Knowledge + Repo)
         # from typically OpenHands/skills (i.e., the PUBLIC microagents)
@@ -243,6 +284,8 @@ class Memory:
     def _find_microagent_knowledge(self, query: str) -> list[MicroagentKnowledge]:
         """Find microagent knowledge based on a query.
 
+        Searches both traditional microagents AND persistent memory for relevant knowledge.
+
         Args:
             query: The query to search for microagent triggers
 
@@ -267,6 +310,51 @@ class Memory:
                         content=microagent.content,
                     )
                 )
+
+        # ── Integration: search persistent memory ─────────────────────────
+        try:
+            pm_results = self.persistent_memory.search(
+                query=query,
+                memory_type=MemoryType.KNOWLEDGE,
+                limit=5,
+            )
+            for result in pm_results:
+                recalled_content.append(
+                    MicroagentKnowledge(
+                        name=f'persistent:{result.entry.title}',
+                        trigger=query,
+                        content=result.entry.content,
+                    )
+                )
+            if pm_results:
+                logger.debug(
+                    'Found %d persistent memory entries for query: %s',
+                    len(pm_results),
+                    query[:50],
+                )
+        except Exception as e:
+            logger.warning(f'Persistent memory search failed: {e}')
+
+        # ── Integration: search skills by trigger ─────────────────────────
+        try:
+            matched_skills = self.skill_registry.find_by_trigger(query)
+            for skill in matched_skills:
+                recalled_content.append(
+                    MicroagentKnowledge(
+                        name=f'skill:{skill.name}',
+                        trigger=query,
+                        content=skill.to_prompt_context(),
+                    )
+                )
+            if matched_skills:
+                logger.debug(
+                    'Found %d skills matching query: %s',
+                    len(matched_skills),
+                    query[:50],
+                )
+        except Exception as e:
+            logger.warning(f'Skill search failed: {e}')
+
         return recalled_content
 
     def load_user_workspace_microagents(
@@ -284,6 +372,15 @@ class Memory:
                 self.knowledge_microagents[user_microagent.name] = user_microagent
             elif isinstance(user_microagent, RepoMicroagent):
                 self.repo_microagents[user_microagent.name] = user_microagent
+
+    def _load_skills(self) -> None:
+        """Load skills from global and user directories into the skill registry."""
+        try:
+            loader = SkillLoader()
+            loaded_count = self.skill_registry.load_from_loader(loader)
+            logger.info('Loaded %d skills into registry', loaded_count)
+        except Exception as e:
+            logger.warning(f'Failed to load skills: {e}')
 
     def _load_global_microagents(self) -> None:
         """Loads microagents from the global microagents_dir"""

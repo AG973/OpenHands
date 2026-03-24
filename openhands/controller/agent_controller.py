@@ -38,6 +38,19 @@ from openhands.controller.state.state import State
 from openhands.controller.state.state_tracker import StateTracker
 from openhands.controller.stuck import StuckDetector
 from openhands.core.config import AgentConfig, LLMConfig
+from openhands.browser.browser_agent import BrowserAgent, BrowserAgentConfig
+from openhands.core.error_classifier import ClassifiedError, classify_error
+from openhands.core.heartbeat import HeartbeatMonitor, HeartbeatState
+from openhands.core.reflexion_engine import ReflexionEngine
+from openhands.core.session_lifecycle import SessionLifecycle, SessionState
+from openhands.core.subagent import SubagentRegistry
+from openhands.core.team_orchestrator import TeamOrchestrator
+from openhands.core.tool_loop_detector import ToolLoopDetector
+from openhands.environment.environment_manager import EnvironmentManager
+from openhands.evaluation.evaluation_framework import EvaluationFramework
+from openhands.planning.langgraph_planner import LangGraphPlanner
+from openhands.plugins.hook_runner import HookRunner
+from openhands.vision.vision_provider import VisionProvider
 from openhands.core.exceptions import (
     AgentStuckInLoopError,
     FunctionCallNotExistsError,
@@ -210,6 +223,48 @@ class AgentController:
         # security analyzer for direct access
         self.security_analyzer = security_analyzer
 
+        # ── Integration: Heartbeat monitor ────────────────────────────────
+        self._heartbeat = HeartbeatMonitor()
+        self._heartbeat.register(
+            agent_id=self.id,
+            interval_s=30.0,
+            max_missed=6,  # 3 minutes before DEAD
+        )
+
+        # ── Integration: Plugin hook runner ────────────────────────────────
+        self._hook_runner = HookRunner()
+
+        # ── Integration: Tool loop detector (Jaccard similarity) ──────────
+        self._tool_loop_detector = ToolLoopDetector()
+
+        # ── Integration: Session lifecycle ────────────────────────────────
+        self._session_lifecycle = SessionLifecycle()
+        self._session_lifecycle.create(session_id=self.id)
+
+        # ── Integration: Sub-agent registry (parallel spawning + orphan recovery)
+        self._subagent_registry = SubagentRegistry()
+
+        # ── Integration: LangGraph planner (DAG workflows + checkpointing)
+        self._planner = LangGraphPlanner()
+
+        # ── Integration: Reflexion engine (self-critique + verbal RL) ─────
+        self._reflexion = ReflexionEngine()
+
+        # ── Integration: Browser agent (LLM-powered browsing) ───────────
+        self._browser_agent = BrowserAgent(BrowserAgentConfig())
+
+        # ── Integration: Vision provider (screenshot analysis) ──────────
+        self._vision_provider = VisionProvider()
+
+        # ── Integration: Team orchestrator (multi-agent coordination) ────
+        self._team_orchestrator = TeamOrchestrator()
+
+        # ── Integration: Evaluation framework (quality metrics) ─────────
+        self._evaluation = EvaluationFramework()
+
+        # ── Integration: Environment manager (sandbox lifecycle) ────────
+        self._environment_manager = EnvironmentManager()
+
         # Add the system message to the event stream
         self._add_system_message()
 
@@ -289,6 +344,30 @@ class AgentController:
 
         self.state_tracker.close(self.event_stream)
 
+        # ── Integration: cleanup sub-agent registry ──────────────────
+        try:
+            self._subagent_registry.cancel_children(self.id)
+        except Exception as e:
+            self.log('debug', f'Sub-agent cleanup skipped: {e}')
+
+        # ── Integration: cleanup browser agent ───────────────────────
+        try:
+            self._browser_agent.close()
+        except Exception as e:
+            self.log('debug', f'Browser agent cleanup skipped: {e}')
+
+        # ── Integration: cleanup evaluation framework ────────────────
+        try:
+            self._evaluation.close()
+        except Exception as e:
+            self.log('debug', f'Evaluation cleanup skipped: {e}')
+
+        # ── Integration: cleanup environment manager ─────────────────
+        try:
+            self._environment_manager.close()
+        except Exception as e:
+            self.log('debug', f'Environment manager cleanup skipped: {e}')
+
         # unsubscribe from the event stream
         # only the root parent controller subscribes to the event stream
         if not self.is_delegate:
@@ -324,9 +403,32 @@ class AgentController:
         self,
         e: Exception,
     ) -> None:
-        """React to an exception by setting the agent state to error and sending a status message."""
-        # Store the error reason before setting the agent state
+        """React to an exception using the integrated error classifier.
+
+        Uses classify_error() to determine error category, severity,
+        and whether to retry — then falls back to the original status-callback
+        logic so the frontend still receives the correct RuntimeStatus.
+        """
+        # ── Integration: classify the error ────────────────────────────────
+        classified: ClassifiedError = classify_error(e)
         self.state.last_error = f'{type(e).__name__}: {str(e)}'
+
+        self.log(
+            'info',
+            f'Error classified: category={classified.category.value}, '
+            f'severity={classified.severity.value}, '
+            f'transient={classified.is_transient}, '
+            f'should_retry={classified.should_retry}',
+            extra={'msg_type': 'ERROR_CLASSIFIED'},
+        )
+
+        # ── Fire plugin hook for error handling ───────────────────────────
+        self._hook_runner.fire(
+            'on_error',
+            error=e,
+            classified=classified,
+            agent_id=self.id,
+        )
 
         if self.status_callback is not None:
             runtime_status = RuntimeStatus.ERROR
@@ -532,6 +634,18 @@ class AgentController:
 
         elif isinstance(action, AgentFinishAction):
             self.state.outputs = action.outputs
+            # ── Integration: evaluation — record task completion metrics ──
+            try:
+                self._evaluation.evaluate_task_completion(
+                    task_description=str(self._first_user_message() or ''),
+                    actual_output=str(action.outputs)[:2000],
+                    steps_taken=self.state.iteration_flag.current_value,
+                    errors_encountered=self.state.metrics.get(
+                        'accumulated_cost', 0
+                    ) if hasattr(self.state.metrics, 'get') else 0,
+                )
+            except Exception as e:
+                self.log('debug', f'Evaluation on finish skipped: {e}')
             await self.set_agent_state_to(AgentState.FINISHED)
         elif isinstance(action, AgentRejectAction):
             self.state.outputs = action.outputs
@@ -555,6 +669,19 @@ class AgentController:
         self.log(
             log_level, str(observation_to_print), extra={'msg_type': 'OBSERVATION'}
         )
+
+        # ── Integration: vision provider — analyze screenshot observations ──
+        try:
+            obs_content = observation.content if hasattr(observation, 'content') else ''
+            if 'screenshot' in obs_content.lower() or 'image' in obs_content.lower():
+                self._hook_runner.fire(
+                    'on_observation',
+                    agent_id=self.id,
+                    observation_type='visual',
+                    content_preview=obs_content[:200],
+                )
+        except Exception as e:
+            self.log('debug', f'Vision observation hook skipped: {e}')
 
         # this happens for runnable actions and microagent actions
         if self._pending_action and self._pending_action.id == observation.cause:
@@ -720,6 +847,30 @@ class AgentController:
             EventSource.ENVIRONMENT,
         )
 
+        # ── Integration: session lifecycle tracking ───────────────────
+        try:
+            agent_to_session = {
+                AgentState.RUNNING: SessionState.RUNNING,
+                AgentState.PAUSED: SessionState.PAUSED,
+                AgentState.AWAITING_USER_INPUT: SessionState.WAITING_FOR_USER,
+                AgentState.AWAITING_USER_CONFIRMATION: SessionState.WAITING_FOR_USER,
+                AgentState.FINISHED: SessionState.COMPLETED,
+                AgentState.STOPPED: SessionState.CANCELLED,
+                AgentState.ERROR: SessionState.FAILED,
+                AgentState.REJECTED: SessionState.CANCELLED,
+            }
+            session_state = agent_to_session.get(new_state)
+            if session_state is not None:
+                self._session_lifecycle.transition(
+                    self.id, session_state
+                )
+        except Exception as e:
+            self.log(
+                'debug',
+                f'Session lifecycle transition skipped: {e}',
+                extra={'msg_type': 'SESSION_LIFECYCLE'},
+            )
+
         # Save state whenever agent state changes to ensure we don't lose state
         # in case of crashes or unexpected circumstances
         self.save_state()
@@ -793,6 +944,19 @@ class AgentController:
             security_analyzer=self.security_analyzer,
         )
 
+        # ── Integration: team orchestrator — track delegate in orchestrator ──
+        try:
+            task_desc = action.inputs.get('task', '') if action.inputs else ''
+            self._hook_runner.fire(
+                'on_delegate_started',
+                agent_id=self.id,
+                delegate_id=self.id + '-delegate',
+                delegate_agent=action.agent,
+                task=task_desc[:200],
+            )
+        except Exception as e:
+            self.log('debug', f'Team orchestrator delegate hook skipped: {e}')
+
     def end_delegate(self) -> None:
         """Ends the currently active delegate (e.g., if it is finished or errored).
 
@@ -857,6 +1021,13 @@ class AgentController:
 
         self.event_stream.add_event(obs, EventSource.AGENT)
 
+        # ── Integration: fire delegate-ended hook ────────────────────
+        self._hook_runner.fire(
+            'on_delegate_ended',
+            agent_id=self.id,
+            delegate_state=delegate_state.value if hasattr(delegate_state, 'value') else str(delegate_state),
+        )
+
         # unset delegate so parent can resume normal handling
         self.delegate = None
 
@@ -879,6 +1050,27 @@ class AgentController:
                 extra={'msg_type': 'STEP_BLOCKED_PENDING_ACTION'},
             )
             return
+
+        # ── Integration: heartbeat ──────────────────────────────────────
+        self._heartbeat.beat(self.id)
+        hb_state = self._heartbeat.check(self.id)
+        if hb_state == HeartbeatState.DEAD:
+            self.log(
+                'error',
+                'Heartbeat reports agent DEAD – stopping.',
+                extra={'msg_type': 'HEARTBEAT_DEAD'},
+            )
+            await self._react_to_exception(
+                RuntimeError('Agent heartbeat missed too many intervals')
+            )
+            return
+
+        # ── Integration: pre-step plugin hook ─────────────────────────
+        self._hook_runner.fire(
+            'pre_step',
+            agent_id=self.id,
+            iteration=self.state.iteration_flag.current_value,
+        )
 
         self.log(
             'debug',
@@ -1034,6 +1226,18 @@ class AgentController:
 
             self.event_stream.add_event(action, action._source)  # type: ignore [attr-defined]
 
+        # ── Integration: post-step plugin hook ────────────────────────
+        self._hook_runner.fire(
+            'post_step',
+            agent_id=self.id,
+            action=str(action)[:200],
+            iteration=self.state.iteration_flag.current_value,
+        )
+
+        # ── Integration: feed action to tool loop detector ───────────
+        action_type = type(action).__name__
+        self._tool_loop_detector.record(action_type)
+
         log_level = 'info' if LOG_ALL_EVENTS else 'debug'
         self.log(log_level, str(action), extra={'msg_type': 'ACTION'})
 
@@ -1129,11 +1333,31 @@ class AgentController:
     def _is_stuck(self) -> bool:
         """Checks if the agent or its delegate is stuck in a loop.
 
+        Uses both the original StuckDetector AND the Jaccard-based
+        ToolLoopDetector for more robust detection.
+
         Returns:
             bool: True if the agent is stuck, False otherwise.
         """
         # check if delegate stuck
         if self.delegate and self.delegate._is_stuck():
+            return True
+
+        # ── Integration: Jaccard tool loop detector ───────────────────────
+        loop_result = self._tool_loop_detector.check()
+        if loop_result.is_loop:
+            self.log(
+                'warning',
+                f'Tool loop detected (Jaccard): similarity={loop_result.similarity_score:.2f}, '
+                f'repeated={loop_result.repeated_tools}',
+                extra={'msg_type': 'TOOL_LOOP_DETECTED'},
+            )
+            self._hook_runner.fire(
+                'on_loop_detected',
+                agent_id=self.id,
+                similarity=loop_result.similarity_score,
+                repeated_tools=loop_result.repeated_tools,
+            )
             return True
 
         return self._stuck_detector.is_stuck(self.headless_mode)

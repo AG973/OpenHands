@@ -40,6 +40,7 @@ from openhands.core.exceptions import LLMNoResponseError
 from openhands.core.logger import openhands_logger as logger
 from openhands.core.message import Message
 from openhands.llm.debug_mixin import DebugMixin
+from openhands.llm.ollama_provider import OllamaError, OllamaProvider
 from openhands.llm.fn_call_converter import (
     STOP_WORDS,
     convert_fncall_messages_to_non_fncall_messages,
@@ -58,6 +59,7 @@ LLM_RETRY_EXCEPTIONS: tuple[type[Exception], ...] = (
     litellm.Timeout,
     litellm.InternalServerError,
     LLMNoResponseError,
+    OllamaError,
 )
 
 
@@ -94,6 +96,7 @@ class LLM(RetryMixin, DebugMixin):
         self.model_info: ModelInfo | None = None
         self._function_calling_active: bool = False
         self.retry_listener = retry_listener
+        self._ollama_provider: OllamaProvider | None = None
         if self.config.log_completions:
             if self.config.log_completions_folder is None:
                 raise RuntimeError(
@@ -119,6 +122,12 @@ class LLM(RetryMixin, DebugMixin):
         else:
             self.tokenizer = None
 
+        # ── Ollama direct provider (bypasses LiteLLM entirely) ────────
+        if self.config.provider == 'ollama':
+            self._setup_ollama_completion()
+            return
+
+        # ── Standard LiteLLM path ──────────────────────────────────────
         # set up the completion function
         kwargs: dict[str, Any] = {
             'temperature': self.config.temperature,
@@ -432,6 +441,118 @@ class LLM(RetryMixin, DebugMixin):
             return resp
 
         self._completion = wrapper
+
+    def _setup_ollama_completion(self) -> None:
+        """Configure the LLM to use OllamaProvider directly, bypassing LiteLLM.
+
+        This sets up self._completion to call OllamaProvider.chat() and convert
+        the response to a LiteLLM-compatible ModelResponse so the rest of
+        OpenHands' pipeline (metrics, logging, function-call conversion) works
+        without changes.
+        """
+        from openhands.llm.ollama_provider import (
+            DEFAULT_OLLAMA_BASE_URL,
+            OllamaProvider,
+        )
+
+        base_url = (
+            self.config.ollama_base_url
+            or self.config.base_url
+            or DEFAULT_OLLAMA_BASE_URL
+        )
+        self._ollama_provider = OllamaProvider(base_url=base_url)
+
+        # Strip 'ollama/' prefix from model name if present (e.g. 'ollama/deepseek-r1:14b' -> 'deepseek-r1:14b')
+        model_name = self.config.model
+        if model_name.startswith('ollama/'):
+            model_name = model_name[len('ollama/'):]
+
+        # Cost tracking is not applicable for local models
+        self.cost_metric_supported = False
+
+        # Ollama models typically support function calling for newer models
+        self._function_calling_active = False
+
+        logger.info(
+            f'Using native Ollama provider: model={model_name}, base_url={base_url}'
+        )
+
+        provider = self._ollama_provider
+        config = self.config
+
+        def ollama_completion_fn(*args: Any, **kwargs: Any) -> ModelResponse:
+            """Direct Ollama completion that returns a LiteLLM-compatible ModelResponse."""
+            # Extract messages from args/kwargs (same pattern as litellm)
+            messages: list[dict[str, Any]] = []
+            if len(args) > 1:
+                messages = args[1] if len(args) > 1 else args[0]
+            elif 'messages' in kwargs:
+                messages = kwargs['messages']
+
+            # Convert Message objects to dicts if needed
+            if messages and isinstance(messages[0], Message):
+                messages = self.format_messages_for_llm(
+                    cast(list[Message], messages)
+                )
+
+            # Extract tool definitions if provided
+            tools = kwargs.get('tools')
+
+            ollama_resp = provider.chat(
+                model=model_name,
+                messages=messages,
+                temperature=config.temperature,
+                max_tokens=config.max_output_tokens,
+                top_p=config.top_p if config.top_p is not None else None,
+                top_k=int(config.top_k) if config.top_k is not None else None,
+                tools=tools,
+                seed=config.seed,
+            )
+
+            # Convert to LiteLLM-compatible dict, then to ModelResponse
+            resp_dict = provider.to_litellm_response(ollama_resp, model_name)
+            return ModelResponse(**resp_dict)
+
+        # Store the raw function for internal use
+        self._completion_unwrapped = ollama_completion_fn
+
+        # Wrap with retry logic (same as LiteLLM path)
+        @self.retry_decorator(
+            num_retries=self.config.num_retries,
+            retry_exceptions=LLM_RETRY_EXCEPTIONS,
+            retry_min_wait=self.config.retry_min_wait,
+            retry_max_wait=self.config.retry_max_wait,
+            retry_multiplier=self.config.retry_multiplier,
+            retry_listener=self.retry_listener,
+        )
+        def ollama_wrapper(*args: Any, **kwargs: Any) -> ModelResponse:
+            """Retry-wrapped Ollama completion with logging."""
+            start_time = time.time()
+            resp = self._completion_unwrapped(*args, **kwargs)
+
+            # Record latency
+            latency = time.time() - start_time
+            response_id = resp.get('id', 'unknown')
+            self.metrics.add_response_latency(latency, response_id)
+
+            # Log response
+            self.log_response(resp)
+
+            # Record token usage from response
+            usage = resp.get('usage')
+            if usage:
+                self.metrics.add_token_usage(
+                    prompt_tokens=usage.get('prompt_tokens', 0),
+                    completion_tokens=usage.get('completion_tokens', 0),
+                    cache_read_tokens=0,
+                    cache_write_tokens=0,
+                    context_window=0,
+                    response_id=response_id,
+                )
+
+            return resp
+
+        self._completion = ollama_wrapper
 
     @property
     def completion(self) -> Callable:
