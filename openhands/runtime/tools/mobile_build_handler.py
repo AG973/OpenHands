@@ -132,8 +132,8 @@ def setup_eas_config(project_path: str, app_name: str = '', android_package: str
                 app_config = json.load(f)
 
             if app_name:
-                app_config.get('expo', {})['name'] = app_name
-                app_config.get('expo', {})['slug'] = app_name.lower().replace(' ', '-')
+                app_config.setdefault('expo', {})['name'] = app_name
+                app_config.setdefault('expo', {})['slug'] = app_name.lower().replace(' ', '-')
             if android_package:
                 app_config.setdefault('expo', {}).setdefault('android', {})['package'] = android_package
             if ios_bundle:
@@ -492,9 +492,10 @@ def start_android_emulator(avd_name: str = '') -> dict[str, Any]:
             }
         avd_name = avds[0]
 
-    _run_command(
+    subprocess.Popen(
         [emulator_bin, '-avd', avd_name, '-no-window', '-no-audio', '-no-boot-anim'],
-        timeout=5,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
 
     return {
