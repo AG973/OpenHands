@@ -48,22 +48,34 @@ from openhands.events.action import (
     Action,
     BrowseInteractiveAction,
     BrowseURLAction,
+    CloudDeployAction,
     CmdRunAction,
+    DiscordAction,
     FileEditAction,
     FileReadAction,
     FileWriteAction,
+    GitHubAction,
     IPythonRunCellAction,
+    MobileBuildAction,
+    ServerManagementAction,
+    WebsiteBuildAction,
 )
 from openhands.events.event import FileEditSource, FileReadSource
 from openhands.events.observation import (
+    CloudDeployObservation,
     CmdOutputObservation,
+    DiscordObservation,
     ErrorObservation,
     FileDownloadObservation,
     FileEditObservation,
     FileReadObservation,
     FileWriteObservation,
+    GitHubObservation,
     IPythonRunCellObservation,
+    MobileBuildObservation,
     Observation,
+    ServerManagementObservation,
+    WebsiteBuildObservation,
 )
 from openhands.events.serialization import event_from_dict, event_to_dict
 from openhands.runtime.browser import browse
@@ -648,6 +660,78 @@ class ActionExecutor:
                     file_path=tgt_path,
                 )
                 return file_download_obs
+
+    async def github(self, action: GitHubAction) -> Observation:
+        """Execute a GitHub operation."""
+        try:
+            from openhands.runtime.tools.github_handler import execute_github_operation
+            content, result_data = await call_sync_from_async(
+                execute_github_operation, action.operation, action.params
+            )
+            return GitHubObservation(content=content, operation=action.operation, result_data=result_data)
+        except Exception as e:
+            logger.exception(f'Error executing GitHub operation: {e}')
+            return ErrorObservation(f'GitHub operation failed: {e}')
+
+    async def cloud_deploy(self, action: CloudDeployAction) -> Observation:
+        """Execute a cloud deployment operation."""
+        try:
+            from openhands.runtime.tools.cloud_deploy_handler import execute_cloud_deploy_operation
+            content, result_data = await call_sync_from_async(
+                execute_cloud_deploy_operation, action.operation, action.params
+            )
+            return CloudDeployObservation(content=content, operation=action.operation, result_data=result_data)
+        except Exception as e:
+            logger.exception(f'Error executing cloud deploy operation: {e}')
+            return ErrorObservation(f'Cloud deploy operation failed: {e}')
+
+    async def discord(self, action: DiscordAction) -> Observation:
+        """Execute a Discord operation."""
+        try:
+            from openhands.runtime.tools.discord_handler import execute_discord_operation
+            content, result_data = await call_sync_from_async(
+                execute_discord_operation, action.operation, action.params
+            )
+            return DiscordObservation(content=content, operation=action.operation, result_data=result_data)
+        except Exception as e:
+            logger.exception(f'Error executing Discord operation: {e}')
+            return ErrorObservation(f'Discord operation failed: {e}')
+
+    async def mobile_build(self, action: MobileBuildAction) -> Observation:
+        """Execute a mobile build operation."""
+        try:
+            from openhands.runtime.tools.mobile_build_handler import execute_mobile_build_operation
+            content, result_data = await call_sync_from_async(
+                execute_mobile_build_operation, action.operation, action.params
+            )
+            return MobileBuildObservation(content=content, operation=action.operation, result_data=result_data)
+        except Exception as e:
+            logger.exception(f'Error executing mobile build operation: {e}')
+            return ErrorObservation(f'Mobile build operation failed: {e}')
+
+    async def website_build(self, action: WebsiteBuildAction) -> Observation:
+        """Execute a website build operation."""
+        try:
+            from openhands.runtime.tools.website_build_handler import execute_website_build_operation
+            content, result_data = await call_sync_from_async(
+                execute_website_build_operation, action.operation, action.params
+            )
+            return WebsiteBuildObservation(content=content, operation=action.operation, result_data=result_data)
+        except Exception as e:
+            logger.exception(f'Error executing website build operation: {e}')
+            return ErrorObservation(f'Website build operation failed: {e}')
+
+    async def server_management(self, action: ServerManagementAction) -> Observation:
+        """Execute a server management operation."""
+        try:
+            from openhands.runtime.tools.server_management_handler import execute_server_management_operation
+            content, result_data = await call_sync_from_async(
+                execute_server_management_operation, action.operation, action.params
+            )
+            return ServerManagementObservation(content=content, operation=action.operation, result_data=result_data)
+        except Exception as e:
+            logger.exception(f'Error executing server management operation: {e}')
+            return ErrorObservation(f'Server management operation failed: {e}')
 
     def close(self):
         self.memory_monitor.stop_monitoring()

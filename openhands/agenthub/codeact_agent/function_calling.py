@@ -18,11 +18,17 @@ from litellm import (
 
 from openhands.agenthub.codeact_agent.tools import (
     BrowserTool,
+    CloudDeployTool,
     CondensationRequestTool,
+    DiscordTool,
     FinishTool,
+    GitHubTool,
     IPythonTool,
     LLMBasedFileEditTool,
+    MobileBuildTool,
+    ServerManagementTool,
     ThinkTool,
+    WebsiteBuildTool,
     create_cmd_run_tool,
     create_str_replace_editor_tool,
 )
@@ -39,12 +45,18 @@ from openhands.events.action import (
     AgentFinishAction,
     AgentThinkAction,
     BrowseInteractiveAction,
+    CloudDeployAction,
     CmdRunAction,
+    DiscordAction,
     FileEditAction,
     FileReadAction,
+    GitHubAction,
     IPythonRunCellAction,
     MessageAction,
+    MobileBuildAction,
+    ServerManagementAction,
     TaskTrackingAction,
+    WebsiteBuildAction,
 )
 from openhands.events.action.agent import CondensationRequestAction
 from openhands.events.action.mcp import MCPAction
@@ -301,6 +313,72 @@ def response_to_actions(
                     command=arguments['command'],
                     task_list=normalized_task_list,
                 )
+
+            # ================================================
+            # GitHubTool
+            # ================================================
+            elif tool_call.function.name == GitHubTool['function']['name']:
+                if 'operation' not in arguments:
+                    raise FunctionCallValidationError(
+                        f'Missing required argument "operation" in tool call {tool_call.function.name}'
+                    )
+                operation = arguments.pop('operation')
+                action = GitHubAction(operation=operation, params=arguments)
+
+            # ================================================
+            # CloudDeployTool
+            # ================================================
+            elif tool_call.function.name == CloudDeployTool['function']['name']:
+                if 'operation' not in arguments:
+                    raise FunctionCallValidationError(
+                        f'Missing required argument "operation" in tool call {tool_call.function.name}'
+                    )
+                operation = arguments.pop('operation')
+                action = CloudDeployAction(operation=operation, params=arguments)
+
+            # ================================================
+            # DiscordTool
+            # ================================================
+            elif tool_call.function.name == DiscordTool['function']['name']:
+                if 'operation' not in arguments:
+                    raise FunctionCallValidationError(
+                        f'Missing required argument "operation" in tool call {tool_call.function.name}'
+                    )
+                operation = arguments.pop('operation')
+                action = DiscordAction(operation=operation, params=arguments)
+
+            # ================================================
+            # MobileBuildTool
+            # ================================================
+            elif tool_call.function.name == MobileBuildTool['function']['name']:
+                if 'operation' not in arguments:
+                    raise FunctionCallValidationError(
+                        f'Missing required argument "operation" in tool call {tool_call.function.name}'
+                    )
+                operation = arguments.pop('operation')
+                action = MobileBuildAction(operation=operation, params=arguments)
+
+            # ================================================
+            # WebsiteBuildTool
+            # ================================================
+            elif tool_call.function.name == WebsiteBuildTool['function']['name']:
+                if 'operation' not in arguments:
+                    raise FunctionCallValidationError(
+                        f'Missing required argument "operation" in tool call {tool_call.function.name}'
+                    )
+                operation = arguments.pop('operation')
+                action = WebsiteBuildAction(operation=operation, params=arguments)
+
+            # ================================================
+            # ServerManagementTool
+            # ================================================
+            elif tool_call.function.name == ServerManagementTool['function']['name']:
+                if 'operation' not in arguments:
+                    raise FunctionCallValidationError(
+                        f'Missing required argument "operation" in tool call {tool_call.function.name}'
+                    )
+                operation = arguments.pop('operation')
+                action = ServerManagementAction(operation=operation, params=arguments)
 
             # ================================================
             # MCPAction (MCP)

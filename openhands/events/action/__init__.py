@@ -21,8 +21,14 @@ from openhands.events.action.files import (
     FileReadAction,
     FileWriteAction,
 )
+from openhands.events.action.cloud_deploy import CloudDeployAction
+from openhands.events.action.discord import DiscordAction
+from openhands.events.action.github import GitHubAction
 from openhands.events.action.mcp import MCPAction
 from openhands.events.action.message import MessageAction, SystemMessageAction
+from openhands.events.action.mobile_build import MobileBuildAction
+from openhands.events.action.server_management import ServerManagementAction
+from openhands.events.action.website_build import WebsiteBuildAction
 
 __all__ = [
     'Action',
@@ -47,4 +53,10 @@ __all__ = [
     'TaskTrackingAction',
     'ActionSecurityRisk',
     'LoopRecoveryAction',
+    'GitHubAction',
+    'CloudDeployAction',
+    'DiscordAction',
+    'MobileBuildAction',
+    'WebsiteBuildAction',
+    'ServerManagementAction',
 ]

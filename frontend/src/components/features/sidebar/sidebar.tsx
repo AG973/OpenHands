@@ -1,5 +1,5 @@
 import React from "react";
-import { useLocation } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
 import { useGitUser } from "#/hooks/query/use-git-user";
 import { UserActions } from "./user-actions";
@@ -14,10 +14,23 @@ import { useConfig } from "#/hooks/query/use-config";
 import { displayErrorToast } from "#/utils/custom-toast-handlers";
 import { I18nKey } from "#/i18n/declaration";
 import { cn } from "#/utils/utils";
+import {
+  Zap as LucideZap,
+  Brain as LucideBrain,
+  BarChart3 as LucideBarChart3,
+  Puzzle as LucidePuzzle,
+  Rocket as LucideRocket,
+  Smartphone as LucideSmartphone,
+  Server as LucideServer,
+  Cpu as LucideCpu,
+  Bug as LucideBug,
+  GitBranch as LucideGitBranch,
+} from "lucide-react";
 
 export function Sidebar() {
   const { t } = useTranslation();
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const user = useGitUser();
   const { data: config } = useConfig();
   const {
@@ -87,6 +100,36 @@ export function Sidebar() {
               }
               disabled={settings?.email_verified === false}
             />
+          </div>
+
+          {/* Feature Navigation */}
+          <div className="hidden md:flex flex-col items-center gap-2 overflow-y-auto custom-scrollbar py-1">
+            {[
+              { path: "/skills", icon: <LucideZap className="w-[18px] h-[18px]" />, label: "Skills" },
+              { path: "/memory", icon: <LucideBrain className="w-[18px] h-[18px]" />, label: "Memory" },
+              { path: "/evaluation", icon: <LucideBarChart3 className="w-[18px] h-[18px]" />, label: "Evaluation" },
+              { path: "/integrations-hub", icon: <LucidePuzzle className="w-[18px] h-[18px]" />, label: "Integrations" },
+              { path: "/deploy", icon: <LucideRocket className="w-[18px] h-[18px]" />, label: "Deploy" },
+              { path: "/mobile-builder", icon: <LucideSmartphone className="w-[18px] h-[18px]" />, label: "Mobile" },
+              { path: "/servers", icon: <LucideServer className="w-[18px] h-[18px]" />, label: "Servers" },
+              { path: "/gpu-hub", icon: <LucideCpu className="w-[18px] h-[18px]" />, label: "GPU" },
+              { path: "/mobile-testing", icon: <LucideBug className="w-[18px] h-[18px]" />, label: "Testing" },
+              { path: "/github-operations", icon: <LucideGitBranch className="w-[18px] h-[18px]" />, label: "GitHub" },
+            ].map((item) => (
+              <button
+                key={item.path}
+                onClick={() => navigate(item.path)}
+                title={item.label}
+                className={cn(
+                  "w-10 h-10 flex items-center justify-center rounded-xl transition-colors",
+                  pathname === item.path
+                    ? "bg-white/15 text-white"
+                    : "text-gray-500 hover:text-white hover:bg-white/5",
+                )}
+              >
+                {item.icon}
+              </button>
+            ))}
           </div>
 
           <div className="flex flex-row md:flex-col md:items-center gap-[26px]">
