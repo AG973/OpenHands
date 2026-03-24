@@ -12,10 +12,10 @@ from typing import Any
 from openhands.core.logger import openhands_logger as logger
 
 
-def _run_command(cmd: list[str], timeout: int = 120) -> dict[str, Any]:
+def _run_command(cmd: list[str], timeout: int = 120, cwd: str | None = None) -> dict[str, Any]:
     """Run a shell command and return the result."""
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd)
         return {
             'success': result.returncode == 0,
             'stdout': result.stdout,
@@ -66,7 +66,7 @@ def aws_deploy_lambda(project_path: str, service_name: str, region: str = 'us-ea
         return {'error': 'AWS CLI not installed. Run: pip install awscli'}
     # Create zip of project
     zip_path = f'/tmp/{service_name}.zip'
-    _run_command(['zip', '-r', zip_path, '.'], timeout=60)
+    _run_command(['zip', '-r', zip_path, '.'], timeout=60, cwd=project_path)
     result = _run_command([
         'aws', 'lambda', 'create-function',
         '--function-name', service_name,

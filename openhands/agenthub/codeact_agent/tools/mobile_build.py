@@ -6,51 +6,60 @@ mobile applications using React Native and Expo.
 
 from litellm import ChatCompletionToolParam, ChatCompletionToolParamFunctionChunk
 
-_MOBILE_BUILD_DESCRIPTION = """Build, test, and deploy mobile applications for iOS and Android using React Native and Expo.
+_MOBILE_BUILD_DESCRIPTION = """Build, test, and deploy mobile applications for iOS and Android using React Native/Expo. Full pipeline from project creation to app store submission, with automated testing on both platforms.
 
 ### Available Operations:
 
 **Project Setup:**
-1. **create_project** - Create a new React Native or Expo project from a template.
+1. **create_project** - Create a new React Native/Expo project from a template.
 2. **install_dependencies** - Install project dependencies (npm/yarn).
 3. **add_package** - Add a package to the mobile project.
+4. **setup_eas_config** - Generate eas.json and configure EAS Build (app name, bundle IDs).
 
 **Development:**
-4. **start_dev_server** - Start the Expo/React Native development server.
-5. **generate_component** - Generate a new React Native component from a description.
-6. **generate_screen** - Generate a new screen/page with navigation setup.
-7. **add_navigation** - Set up or modify navigation (stack, tab, drawer).
+5. **start_dev_server** - Start the Expo/React Native development server.
+6. **generate_component** - Generate a new React Native component.
+7. **generate_screen** - Generate a new screen/page.
 
 **Building:**
-8. **build_android** - Build the Android APK or AAB.
-9. **build_ios** - Build the iOS app (requires macOS or EAS Build).
+8. **build_android** - Build Android APK/AAB (auto-selects local Gradle or EAS cloud).
+9. **build_ios** - Build iOS app via EAS Build (cloud — no Mac required).
 10. **build_web** - Build the web version of the app (Expo web).
 11. **eas_build** - Trigger a cloud build using Expo Application Services (EAS).
 
-**Testing:**
-12. **run_tests** - Run the test suite for the mobile project.
-13. **start_emulator** - Start an Android emulator or iOS simulator.
-14. **preview_qr** - Generate a QR code for Expo Go preview on a real device.
+**Testing — Maestro UI Automation (iOS + Android):**
+12. **setup_maestro** - Install Maestro CLI for automated UI testing.
+13. **create_maestro_flow** - Create a YAML test flow (e.g., login, signup, checkout).
+14. **run_maestro_test** - Run Maestro UI tests on Android or iOS separately.
+15. **run_maestro_studio** - Start Maestro Studio for visual interactive test building.
+
+**Testing — Cloud Devices (Appetize.io):**
+16. **upload_to_appetize** - Upload APK/IPA to test in browser (no emulator needed).
+17. **get_appetize_embed_url** - Get embeddable URL for specific device/OS version.
+
+**Testing — Local Emulator:**
+18. **start_android_emulator** - Start an Android emulator (requires Android SDK).
+19. **install_apk_on_device** - Install APK on connected device/emulator via ADB.
+
+**Testing — Unit Tests:**
+20. **run_tests** - Run the project's Jest unit test suite.
 
 **Deployment:**
-15. **eas_submit_android** - Submit the Android build to Google Play Store via EAS.
-16. **eas_submit_ios** - Submit the iOS build to Apple App Store via EAS.
-17. **publish_update** - Publish an over-the-air update via EAS Update.
+21. **eas_submit_android** - Submit to Google Play Store via EAS.
+22. **eas_submit_ios** - Submit to Apple App Store via EAS.
+23. **publish_update** - Publish an over-the-air update via EAS Update.
+24. **preview_qr** - Generate QR code for Expo Go preview on real device.
 
-### Templates:
-- **blank** - Minimal blank project
-- **tabs** - Tab-based navigation layout
-- **drawer** - Drawer navigation layout
-- **stack** - Stack navigation layout
-- **ecommerce** - E-commerce app template
-- **social** - Social media app template
-- **chat** - Chat/messaging app template
+### Testing Workflow:
+1. Build: `build_android` (APK) or `build_ios` (IPA via EAS)
+2. Test locally: `start_android_emulator` + `install_apk_on_device` + `run_maestro_test platform=android`
+3. Test in cloud: `upload_to_appetize` + `get_appetize_embed_url` (works for both iOS and Android, no emulator needed)
+4. Test iOS separately: `run_maestro_test platform=ios` (requires iOS simulator or Appetize)
 
-### Usage Notes:
-- Expo is used by default for cross-platform compatibility (iOS + Android + Web).
-- EAS Build handles cloud builds without needing local Android SDK or Xcode.
-- Set EXPO_TOKEN for authenticated EAS operations.
-- For App Store/Play Store submission, configure eas.json in the project.
+### Environment Variables:
+- EXPO_TOKEN — for EAS Build/Submit operations
+- APPETIZE_API_TOKEN — for cloud device testing on Appetize.io
+- ANDROID_HOME — for local Android builds and emulator
 """
 
 MobileBuildTool = ChatCompletionToolParam(
@@ -69,15 +78,22 @@ MobileBuildTool = ChatCompletionToolParam(
                         'install_dependencies',
                         'add_package',
                         'start_dev_server',
+                        'setup_eas_config',
                         'generate_component',
                         'generate_screen',
-                        'add_navigation',
                         'build_android',
                         'build_ios',
                         'build_web',
                         'eas_build',
+                        'setup_maestro',
+                        'create_maestro_flow',
+                        'run_maestro_test',
+                        'run_maestro_studio',
+                        'upload_to_appetize',
+                        'get_appetize_embed_url',
+                        'start_android_emulator',
+                        'install_apk_on_device',
                         'run_tests',
-                        'start_emulator',
                         'preview_qr',
                         'eas_submit_android',
                         'eas_submit_ios',
@@ -128,6 +144,47 @@ MobileBuildTool = ChatCompletionToolParam(
                     'type': 'string',
                     'description': 'Build output type for Android.',
                     'enum': ['apk', 'aab'],
+                },
+                'flow_name': {
+                    'type': 'string',
+                    'description': 'Name of the Maestro test flow (e.g., login, signup, checkout).',
+                },
+                'flow_steps': {
+                    'type': 'array',
+                    'description': 'List of Maestro flow steps as objects (e.g., [{"tapOn": "Login"}, {"assertVisible": "Welcome"}]).',
+                    'items': {'type': 'object'},
+                },
+                'app_path': {
+                    'type': 'string',
+                    'description': 'Path to APK/IPA file (for upload_to_appetize, install_apk_on_device).',
+                },
+                'public_key': {
+                    'type': 'string',
+                    'description': 'Appetize.io public key (from upload_to_appetize result).',
+                },
+                'device': {
+                    'type': 'string',
+                    'description': 'Device model for Appetize.io (e.g., pixel7, iphone15pro).',
+                },
+                'os_version': {
+                    'type': 'string',
+                    'description': 'OS version for Appetize.io (e.g., 14.0, 17.0).',
+                },
+                'avd_name': {
+                    'type': 'string',
+                    'description': 'Android Virtual Device name for emulator.',
+                },
+                'app_name': {
+                    'type': 'string',
+                    'description': 'Application display name (for setup_eas_config).',
+                },
+                'android_package': {
+                    'type': 'string',
+                    'description': 'Android package name (e.g., com.myapp.example) for setup_eas_config.',
+                },
+                'ios_bundle': {
+                    'type': 'string',
+                    'description': 'iOS bundle identifier (e.g., com.myapp.example) for setup_eas_config.',
                 },
             },
             'required': ['operation'],
