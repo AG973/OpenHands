@@ -914,6 +914,7 @@ function App() {
       await apiDelete(`/api/conversations/${convId}`)
     } catch (err) {
       emitLog('error', 'conversation', `Failed to delete conversation ${convId}: ${err instanceof Error ? err.message : String(err)}`)
+      return
     }
     if (activeConvId === convId) { setActiveConvId(null); setMessages([]); setActions([]); socketRef.current?.disconnect() }
     loadConversations()
