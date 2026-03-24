@@ -728,7 +728,7 @@ function App() {
   function handleKeyDown(e: React.KeyboardEvent) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }
   function handleInputChange(e: React.ChangeEvent<HTMLTextAreaElement>) { setInput(e.target.value); const el = e.target; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px' }
   function handleExampleClick(text: string) { setActiveView('chat'); setInput(text); inputRef.current?.focus() }
-  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) { if (e.target.files) { setUploadedFiles(prev => [...prev, ...Array.from(e.target.files!)]) }; e.target.value = '' }
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) { if (e.target.files) { const files = Array.from(e.target.files); setUploadedFiles(prev => [...prev, ...files]) }; e.target.value = '' }
   function removeFile(idx: number) { setUploadedFiles(prev => prev.filter((_, i) => i !== idx)) }
 
   const showWelcome = !activeConvId && messages.length === 0 && activeView === 'chat'
