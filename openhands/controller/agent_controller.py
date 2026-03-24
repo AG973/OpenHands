@@ -640,9 +640,7 @@ class AgentController:
                     task_description=str(self._first_user_message() or ''),
                     actual_output=str(action.outputs)[:2000],
                     steps_taken=self.state.iteration_flag.current_value,
-                    errors_encountered=self.state.metrics.get(
-                        'accumulated_cost', 0
-                    ) if hasattr(self.state.metrics, 'get') else 0,
+                    errors_encountered=0,
                 )
             except Exception as e:
                 self.log('debug', f'Evaluation on finish skipped: {e}')

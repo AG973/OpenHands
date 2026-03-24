@@ -456,8 +456,7 @@ class LLM(RetryMixin, DebugMixin):
         )
 
         base_url = (
-            self.config.ollama_base_url
-            or self.config.base_url
+            self.config.base_url
             or DEFAULT_OLLAMA_BASE_URL
         )
         self._ollama_provider = OllamaProvider(base_url=base_url)
