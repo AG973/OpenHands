@@ -719,7 +719,7 @@ function LogsPanel() {
         <button onClick={exportLogs} title="Export logs" className="p-1.5 rounded-lg text-gray-500 hover:text-white hover:bg-white/5 transition-all">
           <Download className="w-3.5 h-3.5" />
         </button>
-        <button onClick={() => setLogs([])} title="Clear logs" className="p-1.5 rounded-lg text-gray-500 hover:text-red-400 hover:bg-white/5 transition-all">
+        <button onClick={() => { setLogs([]); logBuffer.length = 0 }} title="Clear logs" className="p-1.5 rounded-lg text-gray-500 hover:text-red-400 hover:bg-white/5 transition-all">
           <Trash className="w-3.5 h-3.5" />
         </button>
       </div>
@@ -910,7 +910,11 @@ function App() {
   }
 
   async function deleteConversation(convId: string) {
-    await apiDelete(`/api/conversations/${convId}`)
+    try {
+      await apiDelete(`/api/conversations/${convId}`)
+    } catch (err) {
+      emitLog('error', 'conversation', `Failed to delete conversation ${convId}: ${err instanceof Error ? err.message : String(err)}`)
+    }
     if (activeConvId === convId) { setActiveConvId(null); setMessages([]); setActions([]); socketRef.current?.disconnect() }
     loadConversations()
   }
