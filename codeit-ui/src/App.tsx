@@ -41,7 +41,7 @@ async function apiGet<T>(path: string): Promise<T> {
     if (!res.ok) { emitLog('error', 'api', `GET ${path} failed: HTTP ${res.status}`); throw new Error(`API ${path}: ${res.status}`) }
     emitLog('debug', 'api', `GET ${path} → ${res.status}`)
     return res.json()
-  } catch (err) { emitLog('error', 'api', `GET ${path}: ${err instanceof Error ? err.message : String(err)}`); throw err }
+  } catch (err) { if (!(err instanceof Error && err.message.startsWith('API '))) emitLog('error', 'api', `GET ${path}: ${err instanceof Error ? err.message : String(err)}`); throw err }
 }
 async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   try {
@@ -49,7 +49,7 @@ async function apiPost<T>(path: string, body?: unknown): Promise<T> {
     if (!res.ok) { emitLog('error', 'api', `POST ${path} failed: HTTP ${res.status}`); throw new Error(`API ${path}: ${res.status}`) }
     emitLog('debug', 'api', `POST ${path} → ${res.status}`)
     return res.json()
-  } catch (err) { emitLog('error', 'api', `POST ${path}: ${err instanceof Error ? err.message : String(err)}`); throw err }
+  } catch (err) { if (!(err instanceof Error && err.message.startsWith('API '))) emitLog('error', 'api', `POST ${path}: ${err instanceof Error ? err.message : String(err)}`); throw err }
 }
 async function apiDelete(path: string): Promise<void> {
   try {
@@ -657,7 +657,7 @@ function LogsPanel() {
       case 'error': return 'border-red-500/20 bg-red-950/20'
       case 'warn': return 'border-amber-500/20 bg-amber-950/20'
       case 'event': return 'border-cyan-500/10 bg-cyan-950/10'
-      default: return 'border-white/5 bg-white/2'
+      default: return 'border-white/5 bg-white/5'
     }
   }
 
