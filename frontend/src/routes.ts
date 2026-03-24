@@ -27,6 +27,15 @@ export default [
     route("conversations/:conversationId", "routes/conversation.tsx"),
     route("microagent-management", "routes/microagent-management.tsx"),
     route("oauth/device/verify", "routes/device-verify.tsx"),
+    route("skills", "routes/skills.tsx"),
+    route("memory", "routes/memory.tsx"),
+    route("evaluation", "routes/evaluation.tsx"),
+    route("integrations-hub", "routes/integrations-hub.tsx"),
+    route("deploy", "routes/deploy.tsx"),
+    route("mobile-builder", "routes/mobile-builder.tsx"),
+    route("servers", "routes/servers.tsx"),
+    route("gpu-hub", "routes/gpu-hub.tsx"),
+    route("mobile-testing", "routes/mobile-testing.tsx"),
   ]),
   // Shared routes that don't require authentication
   route(
