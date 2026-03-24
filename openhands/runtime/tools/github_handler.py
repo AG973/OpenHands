@@ -123,7 +123,11 @@ def clone_repo(repo: str, clone_path: str = '') -> dict[str, Any]:
         if result.returncode == 0:
             return {'success': True, 'path': clone_path, 'message': f'Cloned {repo} to {clone_path}'}
         else:
-            return {'error': result.stderr, 'returncode': result.returncode}
+            # Sanitize stderr to avoid leaking tokens embedded in the URL
+            stderr = result.stderr
+            if token and token in stderr:
+                stderr = stderr.replace(token, '***')
+            return {'error': stderr, 'returncode': result.returncode}
     except subprocess.TimeoutExpired:
         return {'error': 'Clone timed out after 120 seconds'}
     except Exception as e:
