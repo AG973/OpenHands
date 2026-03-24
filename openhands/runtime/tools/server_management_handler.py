@@ -113,25 +113,28 @@ def runpod_create(gpu_type: str = 'NVIDIA RTX A6000', gpu_count: int = 1,
         return {'error': 'RUNPOD_API_KEY not set'}
 
     query = '''
-    mutation {{
-        podFindAndDeployOnDemand(input: {{
-            name: "openhands-pod",
-            imageName: "{image}",
-            gpuTypeId: "{gpu}",
-            gpuCount: {count},
-            volumeInGb: {disk},
-            containerDiskInGb: 20
-        }}) {{
+    mutation($input: PodFindAndDeployOnDemandInput!) {
+        podFindAndDeployOnDemand(input: $input) {
             id name gpuCount machineId
-            runtime {{ ports {{ ip port }} }}
-        }}
-    }}
-    '''.format(image=docker_image, gpu=gpu_type, count=gpu_count, disk=disk_size)
+            runtime { ports { ip port } }
+        }
+    }
+    '''
+    variables = {
+        'input': {
+            'name': 'openhands-pod',
+            'imageName': docker_image,
+            'gpuTypeId': gpu_type,
+            'gpuCount': gpu_count,
+            'volumeInGb': disk_size,
+            'containerDiskInGb': 20,
+        }
+    }
 
     try:
         resp = requests.post(
             'https://api.runpod.io/graphql',
-            json={'query': query},
+            json={'query': query, 'variables': variables},
             headers={'Authorization': f'Bearer {api_key}'},
             timeout=60,
         )
@@ -162,11 +165,12 @@ def runpod_stop(instance_id: str) -> dict[str, Any]:
     api_key = os.environ.get('RUNPOD_API_KEY', '')
     if not api_key:
         return {'error': 'RUNPOD_API_KEY not set'}
-    query = f'mutation {{ podStop(input: {{ podId: "{instance_id}" }}) {{ id }} }}'
+    query = 'mutation($input: PodStopInput!) { podStop(input: $input) { id } }'
+    variables = {'input': {'podId': instance_id}}
     try:
         resp = requests.post(
             'https://api.runpod.io/graphql',
-            json={'query': query},
+            json={'query': query, 'variables': variables},
             headers={'Authorization': f'Bearer {api_key}'},
             timeout=30,
         )
@@ -262,11 +266,23 @@ def execute_server_management_operation(operation: str, params: dict[str, Any]) 
         elif operation == 'list_processes':
             result = ssh_execute(hostname, 'ps aux --sort=-%cpu | head -20', username, port, ssh_key_path)
         elif operation == 'kill_process':
-            result = ssh_execute(hostname, f'kill -9 {params.get("process_id", "")}', username, port, ssh_key_path)
+            pid = params.get('process_id', '')
+            if not pid.isdigit():
+                result = {'error': 'process_id must be a numeric value'}
+            else:
+                result = ssh_execute(hostname, f'kill -9 {pid}', username, port, ssh_key_path)
         elif operation == 'start_service':
-            result = ssh_execute(hostname, f'systemctl start {params.get("service_name", "")}', username, port, ssh_key_path)
+            svc = params.get('service_name', '')
+            if not all(c.isalnum() or c in '-_.' for c in svc) or not svc:
+                result = {'error': 'service_name contains invalid characters'}
+            else:
+                result = ssh_execute(hostname, f'systemctl start {svc}', username, port, ssh_key_path)
         elif operation == 'stop_service':
-            result = ssh_execute(hostname, f'systemctl stop {params.get("service_name", "")}', username, port, ssh_key_path)
+            svc = params.get('service_name', '')
+            if not all(c.isalnum() or c in '-_.' for c in svc) or not svc:
+                result = {'error': 'service_name contains invalid characters'}
+            else:
+                result = ssh_execute(hostname, f'systemctl stop {svc}', username, port, ssh_key_path)
         elif operation == 'add_server':
             result = {'message': f'Server {hostname} added to configuration'}
         elif operation == 'remove_server':

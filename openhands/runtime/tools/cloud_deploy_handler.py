@@ -109,30 +109,33 @@ def runpod_deploy_pod(gpu_type: str = 'NVIDIA RTX A6000', gpu_count: int = 1,
         return {'error': 'RUNPOD_API_KEY environment variable not set.'}
 
     query = '''
-    mutation {{
-        podFindAndDeployOnDemand(input: {{
-            name: "openhands-pod",
-            imageName: "{image}",
-            gpuTypeId: "{gpu}",
-            gpuCount: {count},
-            volumeInGb: {disk},
-            containerDiskInGb: 20,
-            minVcpuCount: 2,
-            minMemoryInGb: 8
-        }}) {{
+    mutation($input: PodFindAndDeployOnDemandInput!) {
+        podFindAndDeployOnDemand(input: $input) {
             id
             name
             gpuCount
             machineId
-            runtime {{ ports {{ ip port }} }}
-        }}
-    }}
-    '''.format(image=docker_image, gpu=gpu_type, count=gpu_count, disk=disk_size)
+            runtime { ports { ip port } }
+        }
+    }
+    '''
+    variables = {
+        'input': {
+            'name': 'openhands-pod',
+            'imageName': docker_image,
+            'gpuTypeId': gpu_type,
+            'gpuCount': gpu_count,
+            'volumeInGb': disk_size,
+            'containerDiskInGb': 20,
+            'minVcpuCount': 2,
+            'minMemoryInGb': 8,
+        }
+    }
 
     try:
         resp = requests.post(
             'https://api.runpod.io/graphql',
-            json={'query': query},
+            json={'query': query, 'variables': variables},
             headers={'Authorization': f'Bearer {api_key}'},
             timeout=60,
         )
