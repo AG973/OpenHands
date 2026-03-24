@@ -40,7 +40,7 @@ from openhands.controller.stuck import StuckDetector
 from openhands.core.config import AgentConfig, LLMConfig
 from openhands.browser.browser_agent import BrowserAgent, BrowserAgentConfig
 from openhands.core.error_classifier import ClassifiedError, classify_error
-from openhands.core.heartbeat import HeartbeatMonitor, HeartbeatState
+from openhands.core.heartbeat import HeartbeatConfig, HeartbeatMonitor, HeartbeatState
 from openhands.core.reflexion_engine import ReflexionEngine
 from openhands.core.session_lifecycle import SessionLifecycle, SessionState
 from openhands.core.subagent import SubagentRegistry
@@ -226,9 +226,11 @@ class AgentController:
         # ── Integration: Heartbeat monitor ────────────────────────────────
         self._heartbeat = HeartbeatMonitor()
         self._heartbeat.register(
-            agent_id=self.id,
-            interval_s=30.0,
-            max_missed=6,  # 3 minutes before DEAD
+            HeartbeatConfig(
+                agent_id=self.id,
+                interval_s=30.0,
+                max_missed=6,  # 3 minutes before DEAD
+            )
         )
 
         # ── Integration: Plugin hook runner ────────────────────────────────
@@ -1051,7 +1053,7 @@ class AgentController:
 
         # ── Integration: heartbeat ──────────────────────────────────────
         self._heartbeat.beat(self.id)
-        hb_state = self._heartbeat.check(self.id)
+        hb_state = await self._heartbeat.check(self.id)
         if hb_state == HeartbeatState.DEAD:
             self.log(
                 'error',
