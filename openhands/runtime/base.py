@@ -100,9 +100,24 @@ def _default_env_vars(sandbox_config: SandboxConfig) -> dict[str, str]:
             ret[sandbox_key] = os.environ[key]
     if sandbox_config.enable_auto_lint:
         ret['ENABLE_AUTO_LINT'] = 'true'
-    # Propagate LLM_ prefixed env vars to containers for config override
-    for key in os.environ:
-        if key.startswith('LLM_') and key not in ret:
+    # Propagate safe LLM_ config env vars to containers for config override.
+    # Only non-secret behavioral settings are allowed; credentials like
+    # LLM_API_KEY, LLM_AWS_ACCESS_KEY_ID, LLM_AWS_SECRET_ACCESS_KEY are
+    # excluded to prevent leaking secrets into sandboxed user code.
+    _SAFE_LLM_ENV_VARS = frozenset({
+        'LLM_NATIVE_TOOL_CALLING',
+        'LLM_DROP_PARAMS',
+        'LLM_MODIFY_PARAMS',
+        'LLM_NUM_RETRIES',
+        'LLM_TIMEOUT',
+        'LLM_STREAM',
+        'LLM_DISABLE_STOP_WORD',
+        'LLM_CACHING_PROMPT',
+        'LLM_REASONING_EFFORT',
+        'LLM_MAX_MESSAGE_CHARS',
+    })
+    for key in _SAFE_LLM_ENV_VARS:
+        if key in os.environ and key not in ret:
             ret[key] = os.environ[key]
     return ret
 
