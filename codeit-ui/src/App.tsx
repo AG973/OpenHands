@@ -29,9 +29,12 @@ interface LogEntry { id: number; timestamp: string; level: 'info' | 'warn' | 'er
 type SidebarView = 'chat' | 'skills' | 'knowledge' | 'prompts' | 'connectors' | 'deploy' | 'logs'
 
 /* ── Global log store ── */
+const logBuffer: LogEntry[] = []
 const logListeners: Array<(entry: LogEntry) => void> = []
 function emitLog(level: LogEntry['level'], source: string, message: string, detail?: string) {
   const entry: LogEntry = { id: Date.now() + Math.random(), timestamp: new Date().toISOString(), level, source, message, detail }
+  logBuffer.push(entry)
+  if (logBuffer.length > 1000) logBuffer.splice(0, logBuffer.length - 1000)
   logListeners.forEach(fn => fn(entry))
 }
 
@@ -53,9 +56,10 @@ async function apiPost<T>(path: string, body?: unknown): Promise<T> {
 }
 async function apiDelete(path: string): Promise<void> {
   try {
-    await fetch(`${BACKEND_URL}${path}`, { method: 'DELETE' })
-    emitLog('debug', 'api', `DELETE ${path}`)
-  } catch (err) { emitLog('error', 'api', `DELETE ${path}: ${err instanceof Error ? err.message : String(err)}`); throw err }
+    const res = await fetch(`${BACKEND_URL}${path}`, { method: 'DELETE' })
+    if (!res.ok) { emitLog('error', 'api', `DELETE ${path} failed: HTTP ${res.status}`); throw new Error(`API ${path}: ${res.status}`) }
+    emitLog('debug', 'api', `DELETE ${path} → ${res.status}`)
+  } catch (err) { if (!(err instanceof Error && err.message.startsWith('API '))) emitLog('error', 'api', `DELETE ${path}: ${err instanceof Error ? err.message : String(err)}`); throw err }
 }
 
 function parseEvent(evt: Record<string, unknown>): { message?: ChatMessage; action?: AgentAction } {
@@ -596,7 +600,7 @@ function ConnectorsPanel() {
 /* ═══════════════ DEPLOY PANEL ═══════════════ */
 /* ═══════════════ LOGS / ACTIVITY MONITOR PANEL ═══════════════ */
 function LogsPanel() {
-  const [logs, setLogs] = useState<LogEntry[]>([])
+  const [logs, setLogs] = useState<LogEntry[]>(() => [...logBuffer])
   const [autoScroll, setAutoScroll] = useState(true)
   const [paused, setPaused] = useState(false)
   const [filterLevel, setFilterLevel] = useState<string>('all')
