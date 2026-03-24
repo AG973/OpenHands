@@ -55,7 +55,7 @@ async function apiDelete(path: string): Promise<void> {
   try {
     await fetch(`${BACKEND_URL}${path}`, { method: 'DELETE' })
     emitLog('debug', 'api', `DELETE ${path}`)
-  } catch (err) { emitLog('error', 'api', `DELETE ${path}: ${err instanceof Error ? err.message : String(err)}`) }
+  } catch (err) { emitLog('error', 'api', `DELETE ${path}: ${err instanceof Error ? err.message : String(err)}`); throw err }
 }
 
 function parseEvent(evt: Record<string, unknown>): { message?: ChatMessage; action?: AgentAction } {
