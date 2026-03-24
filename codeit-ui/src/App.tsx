@@ -674,6 +674,10 @@ function App() {
 
   async function createConversation(initialMsg?: string) {
     try {
+      if (initialMsg) {
+        setMessages([{ id: Date.now(), role: 'user', content: initialMsg, timestamp: new Date().toISOString() }])
+        setIsAgentRunning(true)
+      }
       const data = await apiPost<ConversationMeta>('/api/conversations', { initial_user_msg: initialMsg })
       const convId = data.conversation_id
       setActiveConvId(convId)
@@ -685,7 +689,11 @@ function App() {
           if (conv.status === 'RUNNING' || attempts > 30) { clearInterval(poll); connectToConversation(convId); loadConversations() }
         } catch { if (attempts > 30) clearInterval(poll) }
       }, 2000)
-    } catch (err) { console.error('Failed to create conversation:', err) }
+    } catch (err) {
+      console.error('Failed to create conversation:', err)
+      setIsAgentRunning(false)
+      setMessages(prev => [...prev, { id: Date.now(), role: 'system', content: 'Failed to create conversation. Is the backend running?', timestamp: new Date().toISOString() }])
+    }
   }
 
   async function openConversation(convId: string) {
@@ -717,11 +725,14 @@ function App() {
     const text = input.trim()
     if (!text && uploadedFiles.length === 0) return
     if (!activeConvId) { createConversation(text); setInput(''); setUploadedFiles([]); return }
+    const fileNote = uploadedFiles.length > 0 ? ('\n\n' + String.fromCodePoint(0x1F4CE) + ' ' + uploadedFiles.map(f => f.name).join(', ')) : ''
+    setMessages(prev => [...prev, { id: Date.now(), role: 'user', content: text + fileNote, timestamp: new Date().toISOString() }])
+    setInput(''); setUploadedFiles([])
     if (socketRef.current?.connected) {
       socketRef.current.emit('oh_user_action', { action: 'message', args: { content: text, image_urls: [], file_urls: [], timestamp: new Date().toISOString() } })
-      const fileNote = uploadedFiles.length > 0 ? ('\n\n' + String.fromCodePoint(0x1F4CE) + ' ' + uploadedFiles.map(f => f.name).join(', ')) : ''
-      setMessages(prev => [...prev, { id: Date.now(), role: 'user', content: text + fileNote, timestamp: new Date().toISOString() }])
-      setIsAgentRunning(true); setInput(''); setUploadedFiles([])
+      setIsAgentRunning(true)
+    } else {
+      setMessages(prev => [...prev, { id: Date.now() + 1, role: 'system', content: 'Waiting for connection... Your message will be sent when connected.', timestamp: new Date().toISOString() }])
     }
   }
 
