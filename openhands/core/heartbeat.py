@@ -198,8 +198,12 @@ class HeartbeatMonitor:
 
         elapsed = entry.seconds_since_last_beat
         if elapsed > entry.config.interval_s:
-            entry.missed_count += 1
-            entry.total_missed += 1
+            # Compute missed count from elapsed time, not check cycles
+            expected_missed = int(elapsed / entry.config.interval_s)
+            if expected_missed > entry.missed_count:
+                new_misses = expected_missed - entry.missed_count
+                entry.total_missed += new_misses
+                entry.missed_count = expected_missed
 
             if entry.missed_count >= entry.config.max_missed:
                 if entry.state != HeartbeatState.DEAD:

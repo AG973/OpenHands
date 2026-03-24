@@ -276,7 +276,7 @@ def _classify_litellm_error(exc: Exception) -> ClassifiedError | None:
             should_retry=False,
         )
 
-    if 'context_length' in msg or 'context window' in msg or 'max.*token' in msg:
+    if 'context_length' in msg or 'context window' in msg or re.search(r'max.*token', msg):
         return ClassifiedError(
             original_error=exc,
             classification=ErrorClassification.PERMANENT_CONTEXT_LENGTH,
