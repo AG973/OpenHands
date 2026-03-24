@@ -43,7 +43,7 @@ async function apiGet<T>(path: string): Promise<T> {
     const res = await fetch(`${BACKEND_URL}${path}`)
     if (!res.ok) { emitLog('error', 'api', `GET ${path} failed: HTTP ${res.status}`); throw new Error(`API ${path}: ${res.status}`) }
     emitLog('debug', 'api', `GET ${path} → ${res.status}`)
-    return res.json()
+    return await res.json()
   } catch (err) { if (!(err instanceof Error && err.message.startsWith('API '))) emitLog('error', 'api', `GET ${path}: ${err instanceof Error ? err.message : String(err)}`); throw err }
 }
 async function apiPost<T>(path: string, body?: unknown): Promise<T> {
@@ -51,7 +51,7 @@ async function apiPost<T>(path: string, body?: unknown): Promise<T> {
     const res = await fetch(`${BACKEND_URL}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined })
     if (!res.ok) { emitLog('error', 'api', `POST ${path} failed: HTTP ${res.status}`); throw new Error(`API ${path}: ${res.status}`) }
     emitLog('debug', 'api', `POST ${path} → ${res.status}`)
-    return res.json()
+    return await res.json()
   } catch (err) { if (!(err instanceof Error && err.message.startsWith('API '))) emitLog('error', 'api', `POST ${path}: ${err instanceof Error ? err.message : String(err)}`); throw err }
 }
 async function apiDelete(path: string): Promise<void> {
