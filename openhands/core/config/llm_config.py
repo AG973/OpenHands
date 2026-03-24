@@ -58,6 +58,14 @@ class LLMConfig(BaseModel):
     """
 
     model: str = Field(default='claude-opus-4-5-20251101')
+    provider: str | None = Field(
+        default=None,
+        description=(
+            "LLM provider to use. Set to 'ollama' to bypass LiteLLM and "
+            "communicate directly with a local Ollama instance. When None, "
+            "uses LiteLLM (the default OpenHands behavior)."
+        ),
+    )
     api_key: SecretStr | None = Field(default=None)
     base_url: str | None = Field(default=None)
     api_version: str | None = Field(default=None)
