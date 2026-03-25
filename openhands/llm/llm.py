@@ -473,7 +473,9 @@ class LLM(RetryMixin, DebugMixin):
         self._function_calling_active = False
 
         logger.info(
-            f'Using native Ollama provider: model={model_name}, base_url={base_url}'
+            f'[LLM-OLLAMA] *** NATIVE OLLAMA PATH ACTIVE *** '
+            f'model={model_name}, base_url={base_url}, '
+            f'litellm=BYPASSED, client=OllamaProvider.chat'
         )
 
         provider = self._ollama_provider

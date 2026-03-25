@@ -15,7 +15,12 @@ import {
 } from 'lucide-react'
 import './App.css'
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || ''
+// ─── Backend URL configuration ───────────────────────────────────────────────
+// In production (static serve), VITE_BACKEND_URL must point to the backend host.
+// In dev mode, vite.config.ts proxy handles /api and /socket.io automatically.
+// We strip trailing slashes to avoid double-slash issues.
+const RAW_BACKEND = import.meta.env.VITE_BACKEND_URL || ''
+const BACKEND_URL = RAW_BACKEND.replace(/\/+$/, '')
 
 interface ChatMessage { id: number; role: 'user' | 'assistant' | 'system'; content: string; timestamp: string }
 interface AgentAction { id: number; type: 'command' | 'file_write' | 'file_edit' | 'browse' | 'think' | 'task' | 'other'; title: string; detail: string; status: 'running' | 'done' | 'error' }
@@ -28,38 +33,87 @@ interface LogEntry { id: number; timestamp: string; level: 'info' | 'warn' | 'er
 
 type SidebarView = 'chat' | 'skills' | 'knowledge' | 'prompts' | 'connectors' | 'deploy' | 'logs'
 
-/* ── Global log store ── */
+// ─── Global log buffer (persists even when LogsPanel unmounted) ──────────────
 const logBuffer: LogEntry[] = []
 const logListeners: Array<(entry: LogEntry) => void> = []
 function emitLog(level: LogEntry['level'], source: string, message: string, detail?: string) {
   const entry: LogEntry = { id: Date.now() + Math.random(), timestamp: new Date().toISOString(), level, source, message, detail }
   logBuffer.push(entry)
-  if (logBuffer.length > 1000) logBuffer.splice(0, logBuffer.length - 1000)
+  if (logBuffer.length > 2000) logBuffer.splice(0, logBuffer.length - 2000)
   logListeners.forEach(fn => fn(entry))
 }
 
-async function apiGet<T>(path: string): Promise<T> {
+// ─── API helpers with real error parsing ─────────────────────────────────────
+async function parseError(res: Response): Promise<string> {
   try {
-    const res = await fetch(`${BACKEND_URL}${path}`)
-    if (!res.ok) { emitLog('error', 'api', `GET ${path} failed: HTTP ${res.status}`); throw new Error(`API ${path}: ${res.status}`) }
-    emitLog('debug', 'api', `GET ${path} → ${res.status}`)
+    const text = await res.text()
+    try {
+      const json = JSON.parse(text)
+      return json.detail || json.error || json.message || text
+    } catch {
+      return text || `HTTP ${res.status}`
+    }
+  } catch {
+    return `HTTP ${res.status}`
+  }
+}
+
+async function apiGet<T>(path: string): Promise<T> {
+  const url = `${BACKEND_URL}${path}`
+  try {
+    const res = await fetch(url, { headers: { 'Accept': 'application/json' } })
+    if (!res.ok) {
+      const errMsg = await parseError(res)
+      emitLog('error', 'api', `GET ${path} failed: ${res.status} - ${errMsg}`)
+      throw new Error(`GET ${path}: ${res.status} - ${errMsg}`)
+    }
+    emitLog('debug', 'api', `GET ${path} -> ${res.status}`)
     return await res.json()
-  } catch (err) { if (!(err instanceof Error && err.message.startsWith('API '))) emitLog('error', 'api', `GET ${path}: ${err instanceof Error ? err.message : String(err)}`); throw err }
+  } catch (err) {
+    if (!(err instanceof Error && err.message.startsWith('GET '))) {
+      emitLog('error', 'api', `GET ${path}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    throw err
+  }
 }
 async function apiPost<T>(path: string, body?: unknown): Promise<T> {
+  const url = `${BACKEND_URL}${path}`
   try {
-    const res = await fetch(`${BACKEND_URL}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined })
-    if (!res.ok) { emitLog('error', 'api', `POST ${path} failed: HTTP ${res.status}`); throw new Error(`API ${path}: ${res.status}`) }
-    emitLog('debug', 'api', `POST ${path} → ${res.status}`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    })
+    if (!res.ok) {
+      const errMsg = await parseError(res)
+      emitLog('error', 'api', `POST ${path} failed: ${res.status} - ${errMsg}`)
+      throw new Error(`POST ${path}: ${res.status} - ${errMsg}`)
+    }
+    emitLog('debug', 'api', `POST ${path} -> ${res.status}`)
     return await res.json()
-  } catch (err) { if (!(err instanceof Error && err.message.startsWith('API '))) emitLog('error', 'api', `POST ${path}: ${err instanceof Error ? err.message : String(err)}`); throw err }
+  } catch (err) {
+    if (!(err instanceof Error && err.message.startsWith('POST '))) {
+      emitLog('error', 'api', `POST ${path}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    throw err
+  }
 }
 async function apiDelete(path: string): Promise<void> {
+  const url = `${BACKEND_URL}${path}`
   try {
-    const res = await fetch(`${BACKEND_URL}${path}`, { method: 'DELETE' })
-    if (!res.ok) { emitLog('error', 'api', `DELETE ${path} failed: HTTP ${res.status}`); throw new Error(`API ${path}: ${res.status}`) }
-    emitLog('debug', 'api', `DELETE ${path} → ${res.status}`)
-  } catch (err) { if (!(err instanceof Error && err.message.startsWith('API '))) emitLog('error', 'api', `DELETE ${path}: ${err instanceof Error ? err.message : String(err)}`); throw err }
+    const res = await fetch(url, { method: 'DELETE', headers: { 'Accept': 'application/json' } })
+    if (!res.ok) {
+      const errMsg = await parseError(res)
+      emitLog('error', 'api', `DELETE ${path} failed: ${res.status} - ${errMsg}`)
+      throw new Error(`DELETE ${path}: ${res.status} - ${errMsg}`)
+    }
+    emitLog('debug', 'api', `DELETE ${path} -> ${res.status}`)
+  } catch (err) {
+    if (!(err instanceof Error && err.message.startsWith('DELETE '))) {
+      emitLog('error', 'api', `DELETE ${path}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    throw err
+  }
 }
 
 function parseEvent(evt: Record<string, unknown>): { message?: ChatMessage; action?: AgentAction } {
@@ -597,174 +651,115 @@ function ConnectorsPanel() {
   )
 }
 
-/* ═══════════════ DEPLOY PANEL ═══════════════ */
 /* ═══════════════ LOGS / ACTIVITY MONITOR PANEL ═══════════════ */
 function LogsPanel() {
   const [logs, setLogs] = useState<LogEntry[]>(() => [...logBuffer])
-  const [autoScroll, setAutoScroll] = useState(true)
+  const [filter, setFilter] = useState<LogEntry['level'] | 'all'>('all')
+  const [searchTerm, setSearchTerm] = useState('')
   const [paused, setPaused] = useState(false)
-  const [filterLevel, setFilterLevel] = useState<string>('all')
-  const [searchQuery, setSearchQuery] = useState('')
-  const [expandedId, setExpandedId] = useState<number | null>(null)
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const pausedRef = useRef(false)
-  pausedRef.current = paused
+  const listRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const handler = (entry: LogEntry) => {
-      if (!pausedRef.current) setLogs(prev => [...prev.slice(-999), entry])
+      if (!paused) setLogs(prev => [...prev.slice(-1999), entry])
     }
     logListeners.push(handler)
-    return () => { const idx = logListeners.indexOf(handler); if (idx >= 0) logListeners.splice(idx, 1) }
-  }, [])
-
-  useEffect(() => {
-    if (autoScroll && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-  }, [logs, autoScroll])
-
-  // Poll backend health every 10s
-  useEffect(() => {
-    async function checkHealth() {
+    const healthTimer = setInterval(async () => {
       try {
-        const res = await fetch(`${BACKEND_URL}/api/conversations?limit=1`)
-        if (res.ok) emitLog('info', 'health', `Backend healthy (HTTP ${res.status})`)
-        else emitLog('warn', 'health', `Backend returned HTTP ${res.status}`)
+        const url = `${BACKEND_URL}/api/options/models`
+        const res = await fetch(url, { headers: { 'Accept': 'application/json' } })
+        emitLog('info', 'health', `Backend health check: ${res.status}${res.ok ? ' OK' : ' FAIL'}`)
       } catch (err) {
         emitLog('error', 'health', `Backend unreachable: ${err instanceof Error ? err.message : String(err)}`)
       }
+    }, 10000)
+    return () => {
+      const idx = logListeners.indexOf(handler)
+      if (idx >= 0) logListeners.splice(idx, 1)
+      clearInterval(healthTimer)
     }
-    checkHealth()
-    const interval = setInterval(checkHealth, 10000)
-    return () => clearInterval(interval)
-  }, [])
+  }, [paused])
+
+  useEffect(() => {
+    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight
+  }, [logs])
 
   const filtered = logs.filter(l => {
-    if (filterLevel !== 'all' && l.level !== filterLevel) return false
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase()
-      return l.message.toLowerCase().includes(q) || l.source.toLowerCase().includes(q) || (l.detail?.toLowerCase().includes(q) ?? false)
-    }
+    if (filter !== 'all' && l.level !== filter) return false
+    if (searchTerm && !l.message.toLowerCase().includes(searchTerm.toLowerCase()) && !l.source.toLowerCase().includes(searchTerm.toLowerCase())) return false
     return true
   })
 
-  const levelIcon = (level: string) => {
-    switch (level) {
-      case 'error': return <XCircle className="w-3.5 h-3.5 text-red-400" />
-      case 'warn': return <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
-      case 'event': return <Activity className="w-3.5 h-3.5 text-cyan-400" />
-      case 'debug': return <Circle className="w-3.5 h-3.5 text-gray-500" />
-      default: return <Info className="w-3.5 h-3.5 text-emerald-400" />
-    }
+  const levelIcon: Record<string, React.ReactNode> = {
+    info: <Info className="w-3.5 h-3.5 text-blue-400" />,
+    warn: <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />,
+    error: <XCircle className="w-3.5 h-3.5 text-red-400" />,
+    debug: <Circle className="w-3.5 h-3.5 text-gray-500" />,
+    event: <Activity className="w-3.5 h-3.5 text-cyan-400" />,
   }
-  const levelBg = (level: string) => {
-    switch (level) {
-      case 'error': return 'border-red-500/20 bg-red-950/20'
-      case 'warn': return 'border-amber-500/20 bg-amber-950/20'
-      case 'event': return 'border-cyan-500/10 bg-cyan-950/10'
-      default: return 'border-white/5 bg-white/5'
-    }
+  const levelBg: Record<string, string> = {
+    info: 'border-l-blue-500/40', warn: 'border-l-amber-500/40',
+    error: 'border-l-red-500/40 bg-red-900/5', debug: 'border-l-gray-600/40',
+    event: 'border-l-cyan-500/40',
   }
-
-  const errorCount = logs.filter(l => l.level === 'error').length
-  const warnCount = logs.filter(l => l.level === 'warn').length
 
   function exportLogs() {
     const text = filtered.map(l => `[${l.timestamp}] [${l.level.toUpperCase()}] [${l.source}] ${l.message}${l.detail ? '\n  ' + l.detail : ''}`).join('\n')
     const blob = new Blob([text], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
-    const a = document.createElement('a'); a.href = url; a.download = `codeit-logs-${new Date().toISOString().slice(0, 19)}.txt`; a.click()
+    const a = document.createElement('a'); a.href = url; a.download = `codeit-logs-${Date.now()}.txt`; a.click()
     URL.revokeObjectURL(url)
   }
+  function clearLogs() { logBuffer.length = 0; setLogs([]) }
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-white/5">
-        <div>
-          <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-            <ScrollText className="w-5 h-5 text-cyan-400" /> Live Activity Monitor
-          </h2>
-          <p className="text-xs text-gray-500 mt-1">Real-time system logs, events, and error tracking</p>
+    <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="border-b border-white/5 bg-black/20 px-4 py-3 flex items-center gap-3 flex-wrap">
+        <ScrollText className="w-5 h-5 text-cyan-400 flex-shrink-0" />
+        <span className="text-sm font-medium text-white">Live Logs</span>
+        <div className="flex-1" />
+        <div className="flex items-center gap-1 bg-white/5 rounded-lg p-0.5">
+          {(['all', 'info', 'warn', 'error', 'event', 'debug'] as const).map(lv => (
+            <button key={lv} onClick={() => setFilter(lv)}
+              className={`px-2.5 py-1 rounded-md text-xs transition-all ${filter === lv ? 'bg-cyan-800/50 text-cyan-400' : 'text-gray-500 hover:text-gray-300'}`}>
+              {lv === 'all' ? 'All' : lv.charAt(0).toUpperCase() + lv.slice(1)}
+            </button>
+          ))}
         </div>
-        <div className="flex items-center gap-2">
-          {errorCount > 0 && <span className="text-xs px-2 py-1 rounded-full bg-red-900/40 text-red-400 border border-red-500/20">{errorCount} errors</span>}
-          {warnCount > 0 && <span className="text-xs px-2 py-1 rounded-full bg-amber-900/40 text-amber-400 border border-amber-500/20">{warnCount} warnings</span>}
-          <span className="text-xs px-2 py-1 rounded-full bg-white/5 text-gray-400">{logs.length} entries</span>
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
+          <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Filter..."
+            className="bg-white/5 border border-white/10 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-cyan-500/30 w-40" />
         </div>
+        <button onClick={() => setPaused(!paused)} className={`p-1.5 rounded-lg transition-all ${paused ? 'bg-amber-900/30 text-amber-400' : 'text-gray-500 hover:text-white hover:bg-white/5'}`} title={paused ? 'Resume' : 'Pause'}>
+          {paused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+        </button>
+        <button onClick={exportLogs} className="p-1.5 rounded-lg text-gray-500 hover:text-white hover:bg-white/5 transition-all" title="Export"><Download className="w-4 h-4" /></button>
+        <button onClick={clearLogs} className="p-1.5 rounded-lg text-gray-500 hover:text-red-400 hover:bg-white/5 transition-all" title="Clear"><Trash className="w-4 h-4" /></button>
+        <span className="text-xs text-gray-600">{filtered.length} entries</span>
       </div>
-      {/* Toolbar */}
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-white/5 bg-black/10">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
-          <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Filter logs..."
-            className="w-full bg-white/5 border border-white/10 rounded-lg pl-9 pr-3 py-1.5 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-cyan-500/50" />
-        </div>
-        <select value={filterLevel} onChange={e => setFilterLevel(e.target.value)}
-          className="bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-cyan-500/50 appearance-none cursor-pointer">
-          <option value="all">All Levels</option>
-          <option value="error">Errors</option>
-          <option value="warn">Warnings</option>
-          <option value="info">Info</option>
-          <option value="event">Events</option>
-          <option value="debug">Debug</option>
-        </select>
-        <button onClick={() => setPaused(!paused)} title={paused ? 'Resume' : 'Pause'}
-          className={`p-1.5 rounded-lg transition-all ${paused ? 'bg-amber-900/40 text-amber-400 border border-amber-500/20' : 'text-gray-500 hover:text-white hover:bg-white/5'}`}>
-          {paused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
-        </button>
-        <button onClick={() => setAutoScroll(!autoScroll)} title={autoScroll ? 'Auto-scroll on' : 'Auto-scroll off'}
-          className={`p-1.5 rounded-lg transition-all ${autoScroll ? 'text-cyan-400 bg-cyan-900/20' : 'text-gray-500 hover:text-white hover:bg-white/5'}`}>
-          <ChevronDown className="w-3.5 h-3.5" />
-        </button>
-        <button onClick={exportLogs} title="Export logs" className="p-1.5 rounded-lg text-gray-500 hover:text-white hover:bg-white/5 transition-all">
-          <Download className="w-3.5 h-3.5" />
-        </button>
-        <button onClick={() => { setLogs([]); logBuffer.length = 0 }} title="Clear logs" className="p-1.5 rounded-lg text-gray-500 hover:text-red-400 hover:bg-white/5 transition-all">
-          <Trash className="w-3.5 h-3.5" />
-        </button>
-      </div>
-      {/* Log entries */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto font-mono text-xs">
+      <div ref={listRef} className="flex-1 overflow-y-auto font-mono text-xs">
         {filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-600">
-            <ScrollText className="w-10 h-10 mb-3 text-gray-700" />
-            <p className="text-sm">No log entries{filterLevel !== 'all' || searchQuery ? ' matching filter' : ' yet'}</p>
-            <p className="text-xs mt-1 text-gray-700">Activity will appear here in real-time</p>
+            <ScrollText className="w-8 h-8 mb-3 opacity-30" />
+            <p>No log entries{filter !== 'all' ? ` matching "${filter}"` : ''}</p>
           </div>
         ) : (
-          <div className="divide-y divide-white/3">
-            {filtered.map(entry => (
-              <div key={entry.id}
-                onClick={() => entry.detail ? setExpandedId(expandedId === entry.id ? null : entry.id) : undefined}
-                className={`px-4 py-2 ${levelBg(entry.level)} ${entry.detail ? 'cursor-pointer' : ''} hover:bg-white/3 transition-colors`}>
-                <div className="flex items-start gap-2">
-                  <span className="mt-0.5 flex-shrink-0">{levelIcon(entry.level)}</span>
-                  <span className="text-gray-600 flex-shrink-0 w-20 truncate">{entry.timestamp.split('T')[1]?.slice(0, 12) || entry.timestamp}</span>
-                  <span className={`flex-shrink-0 px-1.5 py-0.5 rounded text-xs ${entry.source === 'error' ? 'bg-red-900/30 text-red-400' : entry.source === 'websocket' ? 'bg-cyan-900/30 text-cyan-400' : entry.source === 'health' ? 'bg-emerald-900/30 text-emerald-400' : 'bg-white/5 text-gray-400'}`}>{entry.source}</span>
-                  <span className="text-gray-300 flex-1 break-all">{entry.message}</span>
-                  {entry.detail && <ChevronRight className={`w-3 h-3 text-gray-600 flex-shrink-0 mt-0.5 transition-transform ${expandedId === entry.id ? 'rotate-90' : ''}`} />}
-                </div>
-                {expandedId === entry.id && entry.detail && (
-                  <pre className="mt-2 ml-6 p-2 rounded-lg bg-black/40 border border-white/5 text-gray-500 overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap">{entry.detail}</pre>
-                )}
-              </div>
-            ))}
-          </div>
+          filtered.map(entry => (
+            <div key={entry.id} className={`flex items-start gap-2 px-4 py-1.5 border-l-2 hover:bg-white/[0.03] transition-colors ${levelBg[entry.level] || 'border-l-gray-700'}`}>
+              <span className="flex-shrink-0 mt-0.5">{levelIcon[entry.level]}</span>
+              <span className="text-gray-600 flex-shrink-0 w-20 truncate">{new Date(entry.timestamp).toLocaleTimeString()}</span>
+              <span className="text-cyan-600 flex-shrink-0 w-16 truncate">{entry.source}</span>
+              <span className="text-gray-300 flex-1 break-all">{entry.message}</span>
+            </div>
+          ))
         )}
-      </div>
-      {/* Status bar */}
-      <div className="flex items-center justify-between px-4 py-1.5 border-t border-white/5 bg-black/20 text-xs text-gray-600">
-        <div className="flex items-center gap-3">
-          {paused ? <span className="flex items-center gap-1 text-amber-400"><Pause className="w-3 h-3" /> Paused</span>
-            : <span className="flex items-center gap-1 text-emerald-400"><Activity className="w-3 h-3" /> Live</span>}
-          <span>{filtered.length} / {logs.length} entries</span>
-        </div>
-        <span>Max 1000 entries (auto-pruning oldest)</span>
       </div>
     </div>
   )
 }
 
+/* ═══════════════ DEPLOY PANEL ═══════════════ */
 function DeployPanel() {
   const targets = [
     { id: 'local', name: 'Local Server', desc: 'Deploy to your local machine or network', icon: <Server className="w-5 h-5" />, status: 'ready' as const },
@@ -823,11 +818,13 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [activeView, setActiveView] = useState<SidebarView>('chat')
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([])
+  const [backendAlive, setBackendAlive] = useState<boolean | null>(null)
   const socketRef = useRef<Socket | null>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const seenIds = useRef<Set<number>>(new Set())
+  const pendingMessageRef = useRef<string | null>(null)
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, actions])
 
@@ -835,24 +832,63 @@ function App() {
     try {
       const data = await apiGet<{ results: ConversationMeta[] }>('/api/conversations?limit=50')
       setConversations(data.results || [])
-    } catch { /* backend may not be ready */ }
+      setBackendAlive(true)
+    } catch { setBackendAlive(false) }
   }, [])
   useEffect(() => { loadConversations() }, [loadConversations])
 
-  const connectToConversation = useCallback((convId: string) => {
+  // Backend health check on mount
+  useEffect(() => {
+    const checkBackend = async () => {
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/options/models`, { headers: { 'Accept': 'application/json' } })
+        setBackendAlive(res.ok)
+        emitLog('info', 'startup', `Backend ${res.ok ? 'reachable' : 'unhealthy'}: ${BACKEND_URL || '(same origin)'}/api/options/models -> ${res.status}`)
+      } catch (err) {
+        setBackendAlive(false)
+        emitLog('error', 'startup', `Backend unreachable at ${BACKEND_URL || '(same origin)'}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    checkBackend()
+  }, [])
+
+  const connectToConversation = useCallback((convId: string, preserveMessages = false) => {
     if (socketRef.current) { socketRef.current.disconnect(); socketRef.current = null }
-    setMessages([]); setActions([]); seenIds.current = new Set(); setWsStatus('connecting'); setIsAgentRunning(false)
-    const baseUrl = BACKEND_URL || window.location.origin
-    const sio = io(baseUrl, { transports: ['websocket'], path: '/socket.io', query: { conversation_id: convId, latest_event_id: -1 } })
-    sio.on('connect', () => { setWsStatus('connected'); emitLog('info', 'websocket', `Connected to conversation ${convId}`) })
+    // Clear messages by default (prevents cross-conversation mixing and reconnect duplication)
+    // Only preserve messages when creating a NEW conversation (optimistic display)
+    if (!preserveMessages) setMessages([])
+    setActions([]); seenIds.current = new Set(); setWsStatus('connecting'); setIsAgentRunning(false)
+    const wsUrl = BACKEND_URL || window.location.origin
+    emitLog('info', 'websocket', `Connecting to ${wsUrl}/socket.io?conversation_id=${convId}`)
+    const sio = io(wsUrl, { transports: ['websocket', 'polling'], path: '/socket.io', query: { conversation_id: convId, latest_event_id: -1 } })
+    sio.on('connect', () => {
+      setWsStatus('connected'); emitLog('info', 'websocket', `Connected to conversation ${convId}`)
+      // Send any pending message that was queued while disconnected
+      const pending = pendingMessageRef.current
+      if (pending) {
+        pendingMessageRef.current = null
+        sio.emit('oh_user_action', { action: 'message', args: { content: pending, image_urls: [], file_urls: [], timestamp: new Date().toISOString() } })
+        setIsAgentRunning(true)
+        emitLog('info', 'chat', `Sent queued message after reconnect: "${pending.slice(0, 80)}${pending.length > 80 ? '...' : ''}"`)
+      }
+    })
     sio.on('oh_event', (evt: Record<string, unknown>) => {
       const evtId = Number(evt.id)
       if (seenIds.current.has(evtId)) return
       seenIds.current.add(evtId)
       const { message, action } = parseEvent(evt)
-      if (message) { setMessages(prev => [...prev, message]); if (message.role === 'assistant') setIsAgentRunning(false) }
+      if (message) {
+        setMessages(prev => {
+          // Deduplicate: only check last few messages to catch optimistic display echoes
+          const recent = prev.slice(-3)
+          const isDuplicate = recent.some(m => m.role === message.role && m.content === message.content)
+          if (isDuplicate) return prev
+          return [...prev, message]
+        })
+        if (message.role === 'assistant') setIsAgentRunning(false)
+      }
       if (action) { setActions(prev => [...prev, action]); if (action.status === 'running') setIsAgentRunning(true) }
-      emitLog('event', 'websocket', `${evt.action || evt.observation || evt.type || 'event'} from ${evt.source || '?'}`, JSON.stringify(evt, null, 2))
+      emitLog('event', 'websocket', `${evt.action || evt.observation || evt.type || 'event'} from ${evt.source || '?'}`)
       const extras = evt.extras as Record<string, string> | undefined
       if (evt.observation === 'agent_state_changed') {
         const state = extras?.agent_state
@@ -874,29 +910,39 @@ function App() {
       const data = await apiPost<ConversationMeta>('/api/conversations', { initial_user_msg: initialMsg })
       const convId = data.conversation_id
       setActiveConvId(convId)
+      emitLog('info', 'conversation', `Created conversation ${convId}`)
       let attempts = 0
       const poll = setInterval(async () => {
         attempts++
         try {
           const conv = await apiGet<ConversationMeta>(`/api/conversations/${convId}`)
-          if (conv.status === 'RUNNING' || attempts > 30) { clearInterval(poll); connectToConversation(convId); loadConversations() }
+          if (conv.status === 'RUNNING' || attempts > 30) {
+            clearInterval(poll)
+            try { await apiPost(`/api/conversations/${convId}/start`, { providers_set: [] }) } catch { /* may already be started */ }
+            connectToConversation(convId, true)  // preserve optimistic message
+            loadConversations()
+          }
         } catch { if (attempts > 30) clearInterval(poll) }
       }, 2000)
     } catch (err) {
       console.error('Failed to create conversation:', err)
       emitLog('error', 'conversation', `Failed to create conversation: ${err instanceof Error ? err.message : String(err)}`)
       setIsAgentRunning(false)
-      setMessages(prev => [...prev, { id: Date.now(), role: 'system', content: 'Failed to create conversation. Is the backend running?', timestamp: new Date().toISOString() }])
+      setMessages(prev => [...prev, {
+        id: Date.now(), role: 'system',
+        content: `Failed to create conversation: ${err instanceof Error ? err.message : 'Unknown error'}. Is the backend running at ${BACKEND_URL || '(same origin)'}?`,
+        timestamp: new Date().toISOString()
+      }])
     }
   }
 
   async function openConversation(convId: string) {
-    setActiveConvId(convId); setActiveView('chat')
+    setActiveConvId(convId); setActiveView('chat'); setMessages([])
     try {
       const conv = await apiGet<ConversationMeta>(`/api/conversations/${convId}`)
       if (conv.status === 'RUNNING') { connectToConversation(convId) }
       else {
-        try { await apiPost(`/api/conversations/${convId}/start`) } catch { /* */ }
+        try { await apiPost(`/api/conversations/${convId}/start`, { providers_set: [] }) } catch { /* */ }
         let attempts = 0
         const poll = setInterval(async () => {
           attempts++
@@ -913,7 +959,7 @@ function App() {
     try {
       await apiDelete(`/api/conversations/${convId}`)
     } catch (err) {
-      emitLog('error', 'conversation', `Failed to delete conversation ${convId}: ${err instanceof Error ? err.message : String(err)}`)
+      emitLog('error', 'conversation', `Failed to delete ${convId}: ${err instanceof Error ? err.message : String(err)}`)
       return
     }
     if (activeConvId === convId) { setActiveConvId(null); setMessages([]); setActions([]); socketRef.current?.disconnect() }
@@ -930,8 +976,12 @@ function App() {
     if (socketRef.current?.connected) {
       socketRef.current.emit('oh_user_action', { action: 'message', args: { content: text, image_urls: [], file_urls: [], timestamp: new Date().toISOString() } })
       setIsAgentRunning(true)
+      emitLog('info', 'chat', `Sent message: "${text.slice(0, 80)}${text.length > 80 ? '...' : ''}"`)
     } else {
-      setMessages(prev => [...prev, { id: Date.now() + 1, role: 'system', content: 'Waiting for connection... Your message will be sent when connected.', timestamp: new Date().toISOString() }])
+      emitLog('warn', 'chat', 'WebSocket not connected, message queued for resend after reconnect')
+      pendingMessageRef.current = text
+      setMessages(prev => [...prev, { id: Date.now() + 1, role: 'system', content: 'WebSocket not connected. Reconnecting and will resend your message...', timestamp: new Date().toISOString() }])
+      if (activeConvId) connectToConversation(activeConvId)
     }
   }
 
@@ -1039,6 +1089,10 @@ function App() {
               <span className="text-sm font-bold text-white">CODEIT</span>
             </div>
           )}
+          <div className={`ml-3 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs ${backendAlive === true ? 'bg-emerald-900/30 text-emerald-400 border border-emerald-500/20' : backendAlive === false ? 'bg-red-900/30 text-red-400 border border-red-500/20' : 'bg-gray-800/30 text-gray-500 border border-white/10'}`}>
+            <div className={`w-1.5 h-1.5 rounded-full ${backendAlive === true ? 'bg-emerald-400' : backendAlive === false ? 'bg-red-400' : 'bg-gray-500'}`} />
+            {backendAlive === true ? 'Backend' : backendAlive === false ? 'Offline' : 'Checking...'}
+          </div>
         </header>
 
         {/* View router */}
