@@ -50,6 +50,7 @@ from openhands.environment.environment_manager import EnvironmentManager
 from openhands.evaluation.evaluation_framework import EvaluationFramework
 from openhands.planning.langgraph_planner import LangGraphPlanner
 from openhands.plugins.hook_runner import HookRunner
+from openhands.plugins.plugin_registry import PluginRegistry
 from openhands.vision.vision_provider import VisionProvider
 from openhands.core.exceptions import (
     AgentStuckInLoopError,
@@ -234,7 +235,7 @@ class AgentController:
         )
 
         # ── Integration: Plugin hook runner ────────────────────────────────
-        self._hook_runner = HookRunner()
+        self._hook_runner = HookRunner(PluginRegistry())
 
         # ── Integration: Tool loop detector (Jaccard similarity) ──────────
         self._tool_loop_detector = ToolLoopDetector()
