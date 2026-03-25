@@ -243,7 +243,10 @@ class StreamingLLM(AsyncLLM):
 
                     content = ollama_chunk.message.content
                     if content:
-                        self.log_response(chunk_resp)
+                        # Use direct debug logging for streaming chunks;
+                        # log_response expects non-streaming ModelResponse with 'message' not 'delta'
+                        from openhands.core.logger import llm_response_logger
+                        llm_response_logger.debug(content)
                     self._post_completion(chunk_resp)
 
                     yield chunk_resp
