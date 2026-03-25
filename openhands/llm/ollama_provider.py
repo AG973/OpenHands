@@ -18,7 +18,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Iterator
+from typing import Any, AsyncIterator, Iterator
 
 import httpx
 
@@ -470,6 +470,49 @@ class OllamaProvider:
             with self._client.stream('POST', '/api/chat', json=payload) as response:
                 response.raise_for_status()
                 for line in response.iter_lines():
+                    if line.strip():
+                        data = json.loads(line)
+                        yield self._parse_stream_chunk(data)
+        except Exception as exc:
+            raise _classify_error(exc) from exc
+
+    async def achat_stream(
+        self,
+        model: str,
+        messages: list[dict[str, Any]],
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        format_type: str | None = None,
+        seed: int | None = None,
+        stop: list[str] | None = None,
+    ) -> AsyncIterator['OllamaStreamChunk']:
+        """Async streaming chat completion request.
+
+        Yields:
+            OllamaStreamChunk objects as they arrive
+        """
+        payload = self._build_chat_payload(
+            model=model,
+            messages=messages,
+            stream=True,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            top_k=top_k,
+            tools=tools,
+            format_type=format_type,
+            seed=seed,
+            stop=stop,
+        )
+
+        try:
+            client = self._get_async_client()
+            async with client.stream('POST', '/api/chat', json=payload) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
                     if line.strip():
                         data = json.loads(line)
                         yield self._parse_stream_chunk(data)
