@@ -9,7 +9,9 @@ import {
   Globe, Github, Cloud, Cpu, Sparkles, ArrowRight,
   Paperclip, BookOpen, Brain, FileText, Link2,
   Save, Edit3, Play, Trash, Search, RefreshCw,
-  Server, MessageCircle, Box, Plug, ToggleLeft, ToggleRight
+  Server, MessageCircle, Box, Plug, ToggleLeft, ToggleRight,
+  ScrollText, AlertTriangle, Info, XCircle, Pause,
+  Download, Circle, Activity
 } from 'lucide-react'
 import './App.css'
 
@@ -22,20 +24,43 @@ interface SkillItem { id: string; name: string; description: string; content: st
 interface KnowledgeItem { id: string; title: string; content: string; tags: string[]; updated_at: string }
 interface PromptItem { id: string; name: string; content: string; active: boolean }
 interface ConnectorItem { id: string; name: string; type: string; icon: string; status: 'connected' | 'disconnected' | 'error'; config: Record<string, string> }
+interface LogEntry { id: number; timestamp: string; level: 'info' | 'warn' | 'error' | 'debug' | 'event'; source: string; message: string; detail?: string }
 
-type SidebarView = 'chat' | 'skills' | 'knowledge' | 'prompts' | 'connectors' | 'deploy'
+type SidebarView = 'chat' | 'skills' | 'knowledge' | 'prompts' | 'connectors' | 'deploy' | 'logs'
+
+/* ── Global log store ── */
+const logBuffer: LogEntry[] = []
+const logListeners: Array<(entry: LogEntry) => void> = []
+function emitLog(level: LogEntry['level'], source: string, message: string, detail?: string) {
+  const entry: LogEntry = { id: Date.now() + Math.random(), timestamp: new Date().toISOString(), level, source, message, detail }
+  logBuffer.push(entry)
+  if (logBuffer.length > 1000) logBuffer.splice(0, logBuffer.length - 1000)
+  logListeners.forEach(fn => fn(entry))
+}
 
 async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${BACKEND_URL}${path}`)
-  if (!res.ok) throw new Error(`API ${path}: ${res.status}`)
-  return res.json()
+  try {
+    const res = await fetch(`${BACKEND_URL}${path}`)
+    if (!res.ok) { emitLog('error', 'api', `GET ${path} failed: HTTP ${res.status}`); throw new Error(`API ${path}: ${res.status}`) }
+    emitLog('debug', 'api', `GET ${path} → ${res.status}`)
+    return await res.json()
+  } catch (err) { if (!(err instanceof Error && err.message.startsWith('API '))) emitLog('error', 'api', `GET ${path}: ${err instanceof Error ? err.message : String(err)}`); throw err }
 }
 async function apiPost<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${BACKEND_URL}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined })
-  if (!res.ok) throw new Error(`API ${path}: ${res.status}`)
-  return res.json()
+  try {
+    const res = await fetch(`${BACKEND_URL}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined })
+    if (!res.ok) { emitLog('error', 'api', `POST ${path} failed: HTTP ${res.status}`); throw new Error(`API ${path}: ${res.status}`) }
+    emitLog('debug', 'api', `POST ${path} → ${res.status}`)
+    return await res.json()
+  } catch (err) { if (!(err instanceof Error && err.message.startsWith('API '))) emitLog('error', 'api', `POST ${path}: ${err instanceof Error ? err.message : String(err)}`); throw err }
 }
-async function apiDelete(path: string): Promise<void> { await fetch(`${BACKEND_URL}${path}`, { method: 'DELETE' }) }
+async function apiDelete(path: string): Promise<void> {
+  try {
+    const res = await fetch(`${BACKEND_URL}${path}`, { method: 'DELETE' })
+    if (!res.ok) { emitLog('error', 'api', `DELETE ${path} failed: HTTP ${res.status}`); throw new Error(`API ${path}: ${res.status}`) }
+    emitLog('debug', 'api', `DELETE ${path} → ${res.status}`)
+  } catch (err) { if (!(err instanceof Error && err.message.startsWith('API '))) emitLog('error', 'api', `DELETE ${path}: ${err instanceof Error ? err.message : String(err)}`); throw err }
+}
 
 function parseEvent(evt: Record<string, unknown>): { message?: ChatMessage; action?: AgentAction } {
   const id = Number(evt.id) || Date.now()
@@ -573,6 +598,173 @@ function ConnectorsPanel() {
 }
 
 /* ═══════════════ DEPLOY PANEL ═══════════════ */
+/* ═══════════════ LOGS / ACTIVITY MONITOR PANEL ═══════════════ */
+function LogsPanel() {
+  const [logs, setLogs] = useState<LogEntry[]>(() => [...logBuffer])
+  const [autoScroll, setAutoScroll] = useState(true)
+  const [paused, setPaused] = useState(false)
+  const [filterLevel, setFilterLevel] = useState<string>('all')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [expandedId, setExpandedId] = useState<number | null>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const pausedRef = useRef(false)
+  pausedRef.current = paused
+
+  useEffect(() => {
+    const handler = (entry: LogEntry) => {
+      if (!pausedRef.current) setLogs(prev => [...prev.slice(-999), entry])
+    }
+    logListeners.push(handler)
+    return () => { const idx = logListeners.indexOf(handler); if (idx >= 0) logListeners.splice(idx, 1) }
+  }, [])
+
+  useEffect(() => {
+    if (autoScroll && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+  }, [logs, autoScroll])
+
+  // Poll backend health every 10s
+  useEffect(() => {
+    async function checkHealth() {
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/conversations?limit=1`)
+        if (res.ok) emitLog('info', 'health', `Backend healthy (HTTP ${res.status})`)
+        else emitLog('warn', 'health', `Backend returned HTTP ${res.status}`)
+      } catch (err) {
+        emitLog('error', 'health', `Backend unreachable: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    checkHealth()
+    const interval = setInterval(checkHealth, 10000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const filtered = logs.filter(l => {
+    if (filterLevel !== 'all' && l.level !== filterLevel) return false
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase()
+      return l.message.toLowerCase().includes(q) || l.source.toLowerCase().includes(q) || (l.detail?.toLowerCase().includes(q) ?? false)
+    }
+    return true
+  })
+
+  const levelIcon = (level: string) => {
+    switch (level) {
+      case 'error': return <XCircle className="w-3.5 h-3.5 text-red-400" />
+      case 'warn': return <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+      case 'event': return <Activity className="w-3.5 h-3.5 text-cyan-400" />
+      case 'debug': return <Circle className="w-3.5 h-3.5 text-gray-500" />
+      default: return <Info className="w-3.5 h-3.5 text-emerald-400" />
+    }
+  }
+  const levelBg = (level: string) => {
+    switch (level) {
+      case 'error': return 'border-red-500/20 bg-red-950/20'
+      case 'warn': return 'border-amber-500/20 bg-amber-950/20'
+      case 'event': return 'border-cyan-500/10 bg-cyan-950/10'
+      default: return 'border-white/5 bg-white/5'
+    }
+  }
+
+  const errorCount = logs.filter(l => l.level === 'error').length
+  const warnCount = logs.filter(l => l.level === 'warn').length
+
+  function exportLogs() {
+    const text = filtered.map(l => `[${l.timestamp}] [${l.level.toUpperCase()}] [${l.source}] ${l.message}${l.detail ? '\n  ' + l.detail : ''}`).join('\n')
+    const blob = new Blob([text], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = `codeit-logs-${new Date().toISOString().slice(0, 19)}.txt`; a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <div className="h-full flex flex-col">
+      {/* Header */}
+      <div className="flex items-center justify-between px-6 py-4 border-b border-white/5">
+        <div>
+          <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+            <ScrollText className="w-5 h-5 text-cyan-400" /> Live Activity Monitor
+          </h2>
+          <p className="text-xs text-gray-500 mt-1">Real-time system logs, events, and error tracking</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {errorCount > 0 && <span className="text-xs px-2 py-1 rounded-full bg-red-900/40 text-red-400 border border-red-500/20">{errorCount} errors</span>}
+          {warnCount > 0 && <span className="text-xs px-2 py-1 rounded-full bg-amber-900/40 text-amber-400 border border-amber-500/20">{warnCount} warnings</span>}
+          <span className="text-xs px-2 py-1 rounded-full bg-white/5 text-gray-400">{logs.length} entries</span>
+        </div>
+      </div>
+      {/* Toolbar */}
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-white/5 bg-black/10">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
+          <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Filter logs..."
+            className="w-full bg-white/5 border border-white/10 rounded-lg pl-9 pr-3 py-1.5 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-cyan-500/50" />
+        </div>
+        <select value={filterLevel} onChange={e => setFilterLevel(e.target.value)}
+          className="bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-cyan-500/50 appearance-none cursor-pointer">
+          <option value="all">All Levels</option>
+          <option value="error">Errors</option>
+          <option value="warn">Warnings</option>
+          <option value="info">Info</option>
+          <option value="event">Events</option>
+          <option value="debug">Debug</option>
+        </select>
+        <button onClick={() => setPaused(!paused)} title={paused ? 'Resume' : 'Pause'}
+          className={`p-1.5 rounded-lg transition-all ${paused ? 'bg-amber-900/40 text-amber-400 border border-amber-500/20' : 'text-gray-500 hover:text-white hover:bg-white/5'}`}>
+          {paused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+        </button>
+        <button onClick={() => setAutoScroll(!autoScroll)} title={autoScroll ? 'Auto-scroll on' : 'Auto-scroll off'}
+          className={`p-1.5 rounded-lg transition-all ${autoScroll ? 'text-cyan-400 bg-cyan-900/20' : 'text-gray-500 hover:text-white hover:bg-white/5'}`}>
+          <ChevronDown className="w-3.5 h-3.5" />
+        </button>
+        <button onClick={exportLogs} title="Export logs" className="p-1.5 rounded-lg text-gray-500 hover:text-white hover:bg-white/5 transition-all">
+          <Download className="w-3.5 h-3.5" />
+        </button>
+        <button onClick={() => { setLogs([]); logBuffer.length = 0 }} title="Clear logs" className="p-1.5 rounded-lg text-gray-500 hover:text-red-400 hover:bg-white/5 transition-all">
+          <Trash className="w-3.5 h-3.5" />
+        </button>
+      </div>
+      {/* Log entries */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto font-mono text-xs">
+        {filtered.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-gray-600">
+            <ScrollText className="w-10 h-10 mb-3 text-gray-700" />
+            <p className="text-sm">No log entries{filterLevel !== 'all' || searchQuery ? ' matching filter' : ' yet'}</p>
+            <p className="text-xs mt-1 text-gray-700">Activity will appear here in real-time</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-white/3">
+            {filtered.map(entry => (
+              <div key={entry.id}
+                onClick={() => entry.detail ? setExpandedId(expandedId === entry.id ? null : entry.id) : undefined}
+                className={`px-4 py-2 ${levelBg(entry.level)} ${entry.detail ? 'cursor-pointer' : ''} hover:bg-white/3 transition-colors`}>
+                <div className="flex items-start gap-2">
+                  <span className="mt-0.5 flex-shrink-0">{levelIcon(entry.level)}</span>
+                  <span className="text-gray-600 flex-shrink-0 w-20 truncate">{entry.timestamp.split('T')[1]?.slice(0, 12) || entry.timestamp}</span>
+                  <span className={`flex-shrink-0 px-1.5 py-0.5 rounded text-xs ${entry.source === 'error' ? 'bg-red-900/30 text-red-400' : entry.source === 'websocket' ? 'bg-cyan-900/30 text-cyan-400' : entry.source === 'health' ? 'bg-emerald-900/30 text-emerald-400' : 'bg-white/5 text-gray-400'}`}>{entry.source}</span>
+                  <span className="text-gray-300 flex-1 break-all">{entry.message}</span>
+                  {entry.detail && <ChevronRight className={`w-3 h-3 text-gray-600 flex-shrink-0 mt-0.5 transition-transform ${expandedId === entry.id ? 'rotate-90' : ''}`} />}
+                </div>
+                {expandedId === entry.id && entry.detail && (
+                  <pre className="mt-2 ml-6 p-2 rounded-lg bg-black/40 border border-white/5 text-gray-500 overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap">{entry.detail}</pre>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      {/* Status bar */}
+      <div className="flex items-center justify-between px-4 py-1.5 border-t border-white/5 bg-black/20 text-xs text-gray-600">
+        <div className="flex items-center gap-3">
+          {paused ? <span className="flex items-center gap-1 text-amber-400"><Pause className="w-3 h-3" /> Paused</span>
+            : <span className="flex items-center gap-1 text-emerald-400"><Activity className="w-3 h-3" /> Live</span>}
+          <span>{filtered.length} / {logs.length} entries</span>
+        </div>
+        <span>Max 1000 entries (auto-pruning oldest)</span>
+      </div>
+    </div>
+  )
+}
+
 function DeployPanel() {
   const targets = [
     { id: 'local', name: 'Local Server', desc: 'Deploy to your local machine or network', icon: <Server className="w-5 h-5" />, status: 'ready' as const },
@@ -652,7 +844,7 @@ function App() {
     setMessages([]); setActions([]); seenIds.current = new Set(); setWsStatus('connecting'); setIsAgentRunning(false)
     const baseUrl = BACKEND_URL || window.location.origin
     const sio = io(baseUrl, { transports: ['websocket'], path: '/socket.io', query: { conversation_id: convId, latest_event_id: -1 } })
-    sio.on('connect', () => setWsStatus('connected'))
+    sio.on('connect', () => { setWsStatus('connected'); emitLog('info', 'websocket', `Connected to conversation ${convId}`) })
     sio.on('oh_event', (evt: Record<string, unknown>) => {
       const evtId = Number(evt.id)
       if (seenIds.current.has(evtId)) return
@@ -660,6 +852,7 @@ function App() {
       const { message, action } = parseEvent(evt)
       if (message) { setMessages(prev => [...prev, message]); if (message.role === 'assistant') setIsAgentRunning(false) }
       if (action) { setActions(prev => [...prev, action]); if (action.status === 'running') setIsAgentRunning(true) }
+      emitLog('event', 'websocket', `${evt.action || evt.observation || evt.type || 'event'} from ${evt.source || '?'}`, JSON.stringify(evt, null, 2))
       const extras = evt.extras as Record<string, string> | undefined
       if (evt.observation === 'agent_state_changed') {
         const state = extras?.agent_state
@@ -667,8 +860,8 @@ function App() {
         else if (state === 'running') setIsAgentRunning(true)
       }
     })
-    sio.on('disconnect', () => setWsStatus('disconnected'))
-    sio.on('connect_error', () => setWsStatus('disconnected'))
+    sio.on('disconnect', (reason) => { setWsStatus('disconnected'); emitLog('warn', 'websocket', `Disconnected: ${reason}`) })
+    sio.on('connect_error', (err) => { setWsStatus('disconnected'); emitLog('error', 'websocket', `Connection error: ${err.message}`) })
     socketRef.current = sio
   }, [])
 
@@ -691,6 +884,7 @@ function App() {
       }, 2000)
     } catch (err) {
       console.error('Failed to create conversation:', err)
+      emitLog('error', 'conversation', `Failed to create conversation: ${err instanceof Error ? err.message : String(err)}`)
       setIsAgentRunning(false)
       setMessages(prev => [...prev, { id: Date.now(), role: 'system', content: 'Failed to create conversation. Is the backend running?', timestamp: new Date().toISOString() }])
     }
@@ -716,7 +910,12 @@ function App() {
   }
 
   async function deleteConversation(convId: string) {
-    await apiDelete(`/api/conversations/${convId}`)
+    try {
+      await apiDelete(`/api/conversations/${convId}`)
+    } catch (err) {
+      emitLog('error', 'conversation', `Failed to delete conversation ${convId}: ${err instanceof Error ? err.message : String(err)}`)
+      return
+    }
     if (activeConvId === convId) { setActiveConvId(null); setMessages([]); setActions([]); socketRef.current?.disconnect() }
     loadConversations()
   }
@@ -751,6 +950,7 @@ function App() {
     { view: 'prompts', icon: <FileText className="w-4 h-4" />, label: 'Prompts' },
     { view: 'connectors', icon: <Plug className="w-4 h-4" />, label: 'Connectors' },
     { view: 'deploy', icon: <Rocket className="w-4 h-4" />, label: 'Deploy' },
+    { view: 'logs', icon: <ScrollText className="w-4 h-4" />, label: 'Logs' },
   ]
 
   return (
@@ -906,6 +1106,8 @@ function App() {
           <ConnectorsPanel />
         ) : activeView === 'deploy' ? (
           <DeployPanel />
+        ) : activeView === 'logs' ? (
+          <LogsPanel />
         ) : null}
       </main>
 
