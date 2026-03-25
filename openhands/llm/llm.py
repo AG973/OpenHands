@@ -497,7 +497,8 @@ class LLM(RetryMixin, DebugMixin):
                 )
 
             # Extract tool definitions if provided
-            tools = kwargs.get('tools')
+            # Strip tools if native_tool_calling is disabled (model doesn't support tools)
+            tools = kwargs.get('tools') if config.native_tool_calling else None
 
             ollama_resp = provider.chat(
                 model=model_name,
