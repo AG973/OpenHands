@@ -30,8 +30,19 @@ for PORT in $BACKEND_PORT $FRONTEND_PORT; do
     echo "$PIDS" | xargs kill -9 2>/dev/null || true
   fi
 done
-docker stop $(docker ps -aq) 2>/dev/null || true
-docker rm $(docker ps -aq) 2>/dev/null || true
+# Only stop/remove OpenHands runtime containers (not unrelated workloads)
+OH_CONTAINERS=$(docker ps -aq --filter "ancestor=$RUNTIME_IMAGE" 2>/dev/null)
+if [ -n "$OH_CONTAINERS" ]; then
+  echo "  Stopping OpenHands runtime containers..."
+  echo "$OH_CONTAINERS" | xargs docker stop 2>/dev/null || true
+  echo "$OH_CONTAINERS" | xargs docker rm 2>/dev/null || true
+fi
+# Also catch containers with openhands in their name
+OH_NAME_CONTAINERS=$(docker ps -aq --filter "name=openhands" 2>/dev/null)
+if [ -n "$OH_NAME_CONTAINERS" ]; then
+  echo "$OH_NAME_CONTAINERS" | xargs docker stop 2>/dev/null || true
+  echo "$OH_NAME_CONTAINERS" | xargs docker rm 2>/dev/null || true
+fi
 sleep 2
 echo "  Done."
 
@@ -118,13 +129,14 @@ echo "  Backend PID: $BACKEND_PID"
 # Wait for backend
 echo "  Waiting for backend..."
 for i in $(seq 1 90); do
-  if ss -tlnp 2>/dev/null | grep -q ":$BACKEND_PORT"; then
+  if ss -tlnp 2>/dev/null | grep -q ":${BACKEND_PORT} "; then
     echo "  Backend UP on port $BACKEND_PORT (${i}s)"
     break
   fi
   if [ "$i" -eq 90 ]; then
-    echo "  WARNING: Backend not up in 90s. Check: tail -f $LOG_BACKEND"
+    echo "  ERROR: Backend not up in 90s. Check: tail -f $LOG_BACKEND"
     tail -15 "$LOG_BACKEND" 2>/dev/null
+    exit 1
   fi
   sleep 1
 done
