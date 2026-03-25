@@ -853,7 +853,8 @@ function App() {
 
   const connectToConversation = useCallback((convId: string) => {
     if (socketRef.current) { socketRef.current.disconnect(); socketRef.current = null }
-    setMessages([]); setActions([]); seenIds.current = new Set(); setWsStatus('connecting'); setIsAgentRunning(false)
+    // Preserve optimistic messages — only clear actions and tracking state
+    setActions([]); seenIds.current = new Set(); setWsStatus('connecting'); setIsAgentRunning(false)
     const wsUrl = BACKEND_URL || window.location.origin
     emitLog('info', 'websocket', `Connecting to ${wsUrl}/socket.io?conversation_id=${convId}`)
     const sio = io(wsUrl, { transports: ['websocket', 'polling'], path: '/socket.io', query: { conversation_id: convId, latest_event_id: -1 } })
@@ -863,7 +864,15 @@ function App() {
       if (seenIds.current.has(evtId)) return
       seenIds.current.add(evtId)
       const { message, action } = parseEvent(evt)
-      if (message) { setMessages(prev => [...prev, message]); if (message.role === 'assistant') setIsAgentRunning(false) }
+      if (message) {
+        setMessages(prev => {
+          // Deduplicate: skip if a message with same role and content already exists (optimistic display)
+          const isDuplicate = prev.some(m => m.role === message.role && m.content === message.content)
+          if (isDuplicate) return prev
+          return [...prev, message]
+        })
+        if (message.role === 'assistant') setIsAgentRunning(false)
+      }
       if (action) { setActions(prev => [...prev, action]); if (action.status === 'running') setIsAgentRunning(true) }
       emitLog('event', 'websocket', `${evt.action || evt.observation || evt.type || 'event'} from ${evt.source || '?'}`)
       const extras = evt.extras as Record<string, string> | undefined
@@ -964,7 +973,7 @@ function App() {
   function handleKeyDown(e: React.KeyboardEvent) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() } }
   function handleInputChange(e: React.ChangeEvent<HTMLTextAreaElement>) { setInput(e.target.value); const el = e.target; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px' }
   function handleExampleClick(text: string) { setActiveView('chat'); setInput(text); inputRef.current?.focus() }
-  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) { if (e.target.files) { setUploadedFiles(prev => [...prev, ...Array.from(e.target.files!)]) }; e.target.value = '' }
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) { if (e.target.files) { const files = Array.from(e.target.files); setUploadedFiles(prev => [...prev, ...files]) }; e.target.value = '' }
   function removeFile(idx: number) { setUploadedFiles(prev => prev.filter((_, i) => i !== idx)) }
 
   const showWelcome = !activeConvId && messages.length === 0 && activeView === 'chat'

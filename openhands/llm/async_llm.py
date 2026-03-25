@@ -223,7 +223,7 @@ class AsyncLLM(LLM):
                 self.metrics.add_response_latency(latency, response_id)
 
                 message_back = resp['choices'][0]['message']['content']
-                self.log_response(message_back)
+                self.log_response(resp)
                 self._post_completion(resp)
 
                 logger.debug(

@@ -243,7 +243,7 @@ class StreamingLLM(AsyncLLM):
 
                     content = ollama_chunk.message.content
                     if content:
-                        self.log_response(content)
+                        self.log_response(chunk_resp)
                     self._post_completion(chunk_resp)
 
                     yield chunk_resp
