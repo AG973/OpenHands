@@ -866,8 +866,9 @@ function App() {
       const { message, action } = parseEvent(evt)
       if (message) {
         setMessages(prev => {
-          // Deduplicate: skip if a message with same role and content already exists (optimistic display)
-          const isDuplicate = prev.some(m => m.role === message.role && m.content === message.content)
+          // Deduplicate: only check last few messages to catch optimistic display echoes
+          const recent = prev.slice(-3)
+          const isDuplicate = recent.some(m => m.role === message.role && m.content === message.content)
           if (isDuplicate) return prev
           return [...prev, message]
         })
@@ -923,7 +924,7 @@ function App() {
   }
 
   async function openConversation(convId: string) {
-    setActiveConvId(convId); setActiveView('chat')
+    setActiveConvId(convId); setActiveView('chat'); setMessages([])
     try {
       const conv = await apiGet<ConversationMeta>(`/api/conversations/${convId}`)
       if (conv.status === 'RUNNING') { connectToConversation(convId) }
