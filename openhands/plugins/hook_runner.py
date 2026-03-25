@@ -24,6 +24,29 @@ class HookRunner:
     def __init__(self, registry: PluginRegistry):
         self._registry = registry
 
+    def fire(self, hook_name: str, **kwargs: Any) -> list[dict[str, Any]]:
+        """Fire a hook by string name, mapping to PluginHook enum if possible.
+
+        This is the primary interface used by AgentController. If the hook name
+        matches a PluginHook enum value, delegates to run_hook. Otherwise returns
+        an empty list (no-op for unrecognized hooks).
+
+        Args:
+            hook_name: String name of the hook (e.g. 'pre_step', 'on_error')
+            **kwargs: Arguments to pass to each plugin's hook method
+
+        Returns:
+            List of non-None results from plugins
+        """
+        matching_hook = None
+        for h in PluginHook:
+            if h.value == hook_name:
+                matching_hook = h
+                break
+        if matching_hook is None:
+            return []
+        return self.run_hook(matching_hook, **kwargs)
+
     def run_hook(
         self,
         hook: PluginHook,
