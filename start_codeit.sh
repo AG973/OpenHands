@@ -62,7 +62,7 @@ done
 if [ "$ALL_PRESENT" -eq 0 ]; then
   echo "  Some dependencies missing. Installing (first run only, ~2-3 min)..."
   touch "$OHDIR/README.md" 2>/dev/null || true
-  cd "$OHDIR"
+  cd "$OHDIR" || { echo "ERROR: Cannot cd to $OHDIR"; exit 1; }
   pip3 install --break-system-packages -e "." 2>&1 | tail -3
   echo "  Done."
 else
@@ -115,7 +115,7 @@ fi
 echo "[7/7] Starting services..."
 
 # Backend
-cd "$OHDIR"
+cd "$OHDIR" || { echo "ERROR: Cannot cd to $OHDIR"; exit 1; }
 export SERVE_FRONTEND=false
 export LLM_MODEL="openai/glm-4.7-flash"
 export LLM_BASE_URL="http://localhost:11434/v1"
@@ -142,7 +142,7 @@ for i in $(seq 1 90); do
 done
 
 # Frontend
-cd "$UIDIR"
+cd "$UIDIR" || { echo "ERROR: Cannot cd to $UIDIR"; exit 1; }
 if [ ! -d "dist" ]; then
   echo "  ERROR: $UIDIR/dist/ not found."
   exit 1
