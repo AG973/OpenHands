@@ -824,6 +824,7 @@ function App() {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const seenIds = useRef<Set<number>>(new Set())
+  const pendingMessageRef = useRef<string | null>(null)
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, actions])
 
@@ -851,14 +852,26 @@ function App() {
     checkBackend()
   }, [])
 
-  const connectToConversation = useCallback((convId: string) => {
+  const connectToConversation = useCallback((convId: string, preserveMessages = false) => {
     if (socketRef.current) { socketRef.current.disconnect(); socketRef.current = null }
-    // Preserve optimistic messages — only clear actions and tracking state
+    // Clear messages by default (prevents cross-conversation mixing and reconnect duplication)
+    // Only preserve messages when creating a NEW conversation (optimistic display)
+    if (!preserveMessages) setMessages([])
     setActions([]); seenIds.current = new Set(); setWsStatus('connecting'); setIsAgentRunning(false)
     const wsUrl = BACKEND_URL || window.location.origin
     emitLog('info', 'websocket', `Connecting to ${wsUrl}/socket.io?conversation_id=${convId}`)
     const sio = io(wsUrl, { transports: ['websocket', 'polling'], path: '/socket.io', query: { conversation_id: convId, latest_event_id: -1 } })
-    sio.on('connect', () => { setWsStatus('connected'); emitLog('info', 'websocket', `Connected to conversation ${convId}`) })
+    sio.on('connect', () => {
+      setWsStatus('connected'); emitLog('info', 'websocket', `Connected to conversation ${convId}`)
+      // Send any pending message that was queued while disconnected
+      const pending = pendingMessageRef.current
+      if (pending) {
+        pendingMessageRef.current = null
+        sio.emit('oh_user_action', { action: 'message', args: { content: pending, image_urls: [], file_urls: [], timestamp: new Date().toISOString() } })
+        setIsAgentRunning(true)
+        emitLog('info', 'chat', `Sent queued message after reconnect: "${pending.slice(0, 80)}${pending.length > 80 ? '...' : ''}"`)
+      }
+    })
     sio.on('oh_event', (evt: Record<string, unknown>) => {
       const evtId = Number(evt.id)
       if (seenIds.current.has(evtId)) return
@@ -906,7 +919,7 @@ function App() {
           if (conv.status === 'RUNNING' || attempts > 30) {
             clearInterval(poll)
             try { await apiPost(`/api/conversations/${convId}/start`, { providers_set: [] }) } catch { /* may already be started */ }
-            connectToConversation(convId)
+            connectToConversation(convId, true)  // preserve optimistic message
             loadConversations()
           }
         } catch { if (attempts > 30) clearInterval(poll) }
@@ -965,8 +978,9 @@ function App() {
       setIsAgentRunning(true)
       emitLog('info', 'chat', `Sent message: "${text.slice(0, 80)}${text.length > 80 ? '...' : ''}"`)
     } else {
-      emitLog('warn', 'chat', 'WebSocket not connected, message queued')
-      setMessages(prev => [...prev, { id: Date.now() + 1, role: 'system', content: 'WebSocket not connected. Reconnecting...', timestamp: new Date().toISOString() }])
+      emitLog('warn', 'chat', 'WebSocket not connected, message queued for resend after reconnect')
+      pendingMessageRef.current = text
+      setMessages(prev => [...prev, { id: Date.now() + 1, role: 'system', content: 'WebSocket not connected. Reconnecting and will resend your message...', timestamp: new Date().toISOString() }])
       if (activeConvId) connectToConversation(activeConvId)
     }
   }
