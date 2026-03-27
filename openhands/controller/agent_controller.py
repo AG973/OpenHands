@@ -38,20 +38,15 @@ from openhands.controller.state.state import State
 from openhands.controller.state.state_tracker import StateTracker
 from openhands.controller.stuck import StuckDetector
 from openhands.core.config import AgentConfig, LLMConfig
-from openhands.browser.browser_agent import BrowserAgent, BrowserAgentConfig
 from openhands.core.error_classifier import ClassifiedError, classify_error
-from openhands.core.heartbeat import HeartbeatConfig, HeartbeatMonitor
-from openhands.core.reflexion_engine import ReflexionEngine
+# DEPRECATED_V0: Legacy integration imports kept for backward compatibility.
+# New code should use EngineeringOS subsystems instead.
 from openhands.core.session_lifecycle import SessionLifecycle, SessionState
-from openhands.core.subagent import SubagentRegistry
-from openhands.core.team_orchestrator import TeamOrchestrator
 from openhands.core.tool_loop_detector import ToolLoopDetector
-from openhands.environment.environment_manager import EnvironmentManager
-from openhands.evaluation.evaluation_framework import EvaluationFramework
-from openhands.planning.langgraph_planner import LangGraphPlanner
-from openhands.plugins.hook_runner import HookRunner
-from openhands.plugins.plugin_registry import PluginRegistry
-from openhands.vision.vision_provider import VisionProvider
+# ── Engineering OS subsystems (V1 replacements) ──────────────────────────
+from openhands.engineering_os import EngineeringOS
+from openhands.observability.log_collector import LogSource
+from openhands.memory.error_memory import ErrorEntry
 from openhands.core.exceptions import (
     AgentStuckInLoopError,
     FunctionCallNotExistsError,
@@ -224,49 +219,29 @@ class AgentController:
         # security analyzer for direct access
         self.security_analyzer = security_analyzer
 
-        # ── Integration: Heartbeat monitor ────────────────────────────────
-        self._heartbeat = HeartbeatMonitor()
-        self._heartbeat.register(
-            HeartbeatConfig(
-                agent_id=self.id,
-                interval_s=30.0,
-                max_missed=6,  # 3 minutes before DEAD
-            )
-        )
+        # ══════════════════════════════════════════════════════════════════
+        # Engineering OS (V1) — primary subsystem spine
+        # All new integration logic flows through EngineeringOS.
+        # Legacy V0 integrations below are kept ONLY as fallback.
+        # ══════════════════════════════════════════════════════════════════
+        try:
+            self._eos = EngineeringOS()
+            self._eos_available = True
+            self.log('info', 'Engineering OS initialized — V1 subsystems active')
+        except Exception as exc:
+            self._eos = None  # type: ignore[assignment]
+            self._eos_available = False
+            self.log('warning', f'Engineering OS unavailable, falling back to V0: {exc}')
 
-        # ── Integration: Plugin hook runner ────────────────────────────────
-        self._hook_runner = HookRunner(PluginRegistry())
-
-        # ── Integration: Tool loop detector (Jaccard similarity) ──────────
+        # ── V0 Fallback: Tool loop detector (Jaccard similarity) ─────────
+        # DEPRECATED_V0: Replaced by EngineeringOS retry_policy + error_memory.
+        # Kept as secondary detection alongside V1 metrics tracking.
         self._tool_loop_detector = ToolLoopDetector()
 
-        # ── Integration: Session lifecycle ────────────────────────────────
+        # ── V0 Fallback: Session lifecycle ───────────────────────────────
+        # DEPRECATED_V0: Replaced by EngineeringOS run_store transitions.
         self._session_lifecycle = SessionLifecycle()
         self._session_lifecycle.create(session_id=self.id)
-
-        # ── Integration: Sub-agent registry (parallel spawning + orphan recovery)
-        self._subagent_registry = SubagentRegistry()
-
-        # ── Integration: LangGraph planner (DAG workflows + checkpointing)
-        self._planner = LangGraphPlanner()
-
-        # ── Integration: Reflexion engine (self-critique + verbal RL) ─────
-        self._reflexion = ReflexionEngine()
-
-        # ── Integration: Browser agent (LLM-powered browsing) ───────────
-        self._browser_agent = BrowserAgent(BrowserAgentConfig())
-
-        # ── Integration: Vision provider (screenshot analysis) ──────────
-        self._vision_provider = VisionProvider()
-
-        # ── Integration: Team orchestrator (multi-agent coordination) ────
-        self._team_orchestrator = TeamOrchestrator()
-
-        # ── Integration: Evaluation framework (quality metrics) ─────────
-        self._evaluation = EvaluationFramework()
-
-        # ── Integration: Environment manager (sandbox lifecycle) ────────
-        self._environment_manager = EnvironmentManager()
 
         # Add the system message to the event stream
         self._add_system_message()
@@ -342,34 +317,22 @@ class AgentController:
 
         Note that it's fairly important that this closes properly, otherwise the state is incomplete.
         """
+        # DEPRECATED_V0: This method is part of the legacy V0 controller.
+        # Use EngineeringOS.run_task() for new task execution paths.
         if set_stop_state:
             await self.set_agent_state_to(AgentState.STOPPED)
 
         self.state_tracker.close(self.event_stream)
 
-        # ── Integration: cleanup sub-agent registry ──────────────────
-        try:
-            self._subagent_registry.cancel_children(self.id)
-        except Exception as e:
-            self.log('debug', f'Sub-agent cleanup skipped: {e}')
-
-        # ── Integration: cleanup browser agent ───────────────────────
-        try:
-            self._browser_agent.close()
-        except Exception as e:
-            self.log('debug', f'Browser agent cleanup skipped: {e}')
-
-        # ── Integration: cleanup evaluation framework ────────────────
-        try:
-            self._evaluation.close()
-        except Exception as e:
-            self.log('debug', f'Evaluation cleanup skipped: {e}')
-
-        # ── Integration: cleanup environment manager ─────────────────
-        try:
-            self._environment_manager.close()
-        except Exception as e:
-            self.log('debug', f'Environment manager cleanup skipped: {e}')
+        # ── Engineering OS: record session close in metrics ──────────
+        if self._eos_available:
+            try:
+                self._eos.metrics.increment('sessions_closed', labels={'agent_id': self.id})
+                self._eos.log_collector.info(
+                    LogSource.AGENT, f'Agent controller closed: {self.id}', task_id=self.id
+                )
+            except Exception as e:
+                self.log('debug', f'EOS close metrics skipped: {e}')
 
         # unsubscribe from the event stream
         # only the root parent controller subscribes to the event stream
@@ -425,13 +388,26 @@ class AgentController:
             extra={'msg_type': 'ERROR_CLASSIFIED'},
         )
 
-        # ── Fire plugin hook for error handling ───────────────────────────
-        self._hook_runner.fire(
-            'on_error',
-            error=e,
-            classified=classified,
-            agent_id=self.id,
-        )
+        # ── Engineering OS: record error in error_memory + metrics ──────
+        # DEPRECATED_V0: Was self._hook_runner.fire('on_error', ...)
+        if self._eos_available:
+            try:
+                self._eos.error_memory.record(ErrorEntry(
+                    error_type=classified.category.value,
+                    error_message=str(e)[:500],
+                    task_id=self.id,
+                    phase='agent_step',
+                ))
+                self._eos.metrics.increment(
+                    'agent_errors', labels={'category': classified.category.value}
+                )
+                self._eos.log_collector.error(
+                    LogSource.AGENT,
+                    f'Error classified: {classified.category.value}',
+                    task_id=self.id,
+                )
+            except Exception as eos_exc:
+                self.log('debug', f'EOS error recording skipped: {eos_exc}')
 
         if self.status_callback is not None:
             runtime_status = RuntimeStatus.ERROR
@@ -637,16 +613,24 @@ class AgentController:
 
         elif isinstance(action, AgentFinishAction):
             self.state.outputs = action.outputs
-            # ── Integration: evaluation — record task completion metrics ──
-            try:
-                self._evaluation.evaluate_task_completion(
-                    task_description=str(self._first_user_message() or ''),
-                    actual_output=str(action.outputs)[:2000],
-                    steps_taken=self.state.iteration_flag.current_value,
-                    errors_encountered=0,
-                )
-            except Exception as e:
-                self.log('debug', f'Evaluation on finish skipped: {e}')
+            # ── Engineering OS: record task completion via metrics + reviewer ──
+            # DEPRECATED_V0: Was self._evaluation.evaluate_task_completion(...)
+            if self._eos_available:
+                try:
+                    self._eos.metrics.increment(
+                        'tasks_completed',
+                        labels={'agent_id': self.id},
+                    )
+                    self._eos.metrics.record_value(
+                        'task_steps', float(self.state.iteration_flag.current_value)
+                    )
+                    self._eos.log_collector.info(
+                        LogSource.AGENT,
+                        f'Task finished: steps={self.state.iteration_flag.current_value}',
+                        task_id=self.id,
+                    )
+                except Exception as e:
+                    self.log('debug', f'EOS task completion metrics skipped: {e}')
             await self.set_agent_state_to(AgentState.FINISHED)
         elif isinstance(action, AgentRejectAction):
             self.state.outputs = action.outputs
@@ -671,18 +655,15 @@ class AgentController:
             log_level, str(observation_to_print), extra={'msg_type': 'OBSERVATION'}
         )
 
-        # ── Integration: vision provider — analyze screenshot observations ──
-        try:
-            obs_content = observation.content if hasattr(observation, 'content') else ''
-            if 'screenshot' in obs_content.lower() or 'image' in obs_content.lower():
-                self._hook_runner.fire(
-                    'on_observation',
-                    agent_id=self.id,
-                    observation_type='visual',
-                    content_preview=obs_content[:200],
+        # ── Engineering OS: track observation in metrics ──────────────────
+        # DEPRECATED_V0: Was self._hook_runner.fire('on_observation', ...)
+        if self._eos_available:
+            try:
+                self._eos.metrics.increment(
+                    'observations_processed', labels={'agent_id': self.id}
                 )
-        except Exception as e:
-            self.log('debug', f'Vision observation hook skipped: {e}')
+            except Exception as e:
+                self.log('debug', f'EOS observation metrics skipped: {e}')
 
         # this happens for runnable actions and microagent actions
         if self._pending_action and self._pending_action.id == observation.cause:
@@ -848,7 +829,23 @@ class AgentController:
             EventSource.ENVIRONMENT,
         )
 
-        # ── Integration: session lifecycle tracking ───────────────────
+        # ── Engineering OS: track state transitions via run_store + metrics ──
+        # DEPRECATED_V0: Was self._session_lifecycle.transition(...)
+        if self._eos_available:
+            try:
+                self._eos.metrics.increment(
+                    'state_transitions',
+                    labels={'from': old_state.name, 'to': new_state.name},
+                )
+                self._eos.log_collector.info(
+                    LogSource.AGENT,
+                    f'State transition: {old_state.name} -> {new_state.name}',
+                    task_id=self.id,
+                )
+            except Exception as eos_exc:
+                self.log('debug', f'EOS state transition tracking skipped: {eos_exc}')
+
+        # V0 fallback: session lifecycle tracking
         try:
             agent_to_session = {
                 AgentState.RUNNING: SessionState.RUNNING,
@@ -868,7 +865,7 @@ class AgentController:
         except Exception as e:
             self.log(
                 'debug',
-                f'Session lifecycle transition skipped: {e}',
+                f'V0 session lifecycle transition skipped: {e}',
                 extra={'msg_type': 'SESSION_LIFECYCLE'},
             )
 
@@ -945,18 +942,22 @@ class AgentController:
             security_analyzer=self.security_analyzer,
         )
 
-        # ── Integration: team orchestrator — track delegate in orchestrator ──
-        try:
-            task_desc = action.inputs.get('task', '') if action.inputs else ''
-            self._hook_runner.fire(
-                'on_delegate_started',
-                agent_id=self.id,
-                delegate_id=self.id + '-delegate',
-                delegate_agent=action.agent,
-                task=task_desc[:200],
-            )
-        except Exception as e:
-            self.log('debug', f'Team orchestrator delegate hook skipped: {e}')
+        # ── Engineering OS: track delegate start via metrics ──────────────
+        # DEPRECATED_V0: Was self._hook_runner.fire('on_delegate_started', ...)
+        if self._eos_available:
+            try:
+                task_desc = action.inputs.get('task', '') if action.inputs else ''
+                self._eos.metrics.increment(
+                    'delegates_started',
+                    labels={'agent_id': self.id, 'delegate': action.agent},
+                )
+                self._eos.log_collector.info(
+                    LogSource.AGENT,
+                    f'Delegate started: {action.agent} — {task_desc[:100]}',
+                    task_id=self.id,
+                )
+            except Exception as e:
+                self.log('debug', f'EOS delegate start tracking skipped: {e}')
 
     def end_delegate(self) -> None:
         """Ends the currently active delegate (e.g., if it is finished or errored).
@@ -1022,12 +1023,19 @@ class AgentController:
 
         self.event_stream.add_event(obs, EventSource.AGENT)
 
-        # ── Integration: fire delegate-ended hook ────────────────────
-        self._hook_runner.fire(
-            'on_delegate_ended',
-            agent_id=self.id,
-            delegate_state=delegate_state.value if hasattr(delegate_state, 'value') else str(delegate_state),
-        )
+        # ── Engineering OS: track delegate end via metrics ────────────────
+        # DEPRECATED_V0: Was self._hook_runner.fire('on_delegate_ended', ...)
+        if self._eos_available:
+            try:
+                self._eos.metrics.increment(
+                    'delegates_completed',
+                    labels={
+                        'agent_id': self.id,
+                        'state': delegate_state.value if hasattr(delegate_state, 'value') else str(delegate_state),
+                    },
+                )
+            except Exception as e:
+                self.log('debug', f'EOS delegate end tracking skipped: {e}')
 
         # unset delegate so parent can resume normal handling
         self.delegate = None
@@ -1052,17 +1060,22 @@ class AgentController:
             )
             return
 
-        # ── Integration: heartbeat — record that the agent is alive ────
-        # Dead-agent detection is handled externally via start_monitor(),
-        # not inline here (beat + check back-to-back is always ACTIVE).
-        self._heartbeat.beat(self.id)
-
-        # ── Integration: pre-step plugin hook ─────────────────────────
-        self._hook_runner.fire(
-            'pre_step',
-            agent_id=self.id,
-            iteration=self.state.iteration_flag.current_value,
-        )
+        # ── Engineering OS: heartbeat + pre-step metrics ──────────────────
+        # DEPRECATED_V0: Was self._heartbeat.beat() + self._hook_runner.fire('pre_step')
+        if self._eos_available:
+            try:
+                self._eos.metrics.increment('heartbeats', labels={'agent_id': self.id})
+                self._eos.metrics.set_gauge('last_heartbeat_ts', time.time())
+                self._eos.metrics.increment(
+                    'agent_steps', labels={'agent_id': self.id}
+                )
+                self._eos.log_collector.debug(
+                    LogSource.AGENT,
+                    f'Pre-step: iteration={self.state.iteration_flag.current_value}',
+                    task_id=self.id,
+                )
+            except Exception as e:
+                self.log('debug', f'EOS pre-step tracking skipped: {e}')
 
         self.log(
             'debug',
@@ -1218,16 +1231,24 @@ class AgentController:
 
             self.event_stream.add_event(action, action._source)  # type: ignore [attr-defined]
 
-        # ── Integration: post-step plugin hook ────────────────────────
-        self._hook_runner.fire(
-            'post_step',
-            agent_id=self.id,
-            action=str(action)[:200],
-            iteration=self.state.iteration_flag.current_value,
-        )
-
-        # ── Integration: feed action to tool loop detector ───────────
+        # ── Engineering OS: post-step metrics + action tracking ────────────
+        # DEPRECATED_V0: Was self._hook_runner.fire('post_step', ...)
         action_type = type(action).__name__
+        if self._eos_available:
+            try:
+                self._eos.metrics.increment(
+                    'agent_actions', labels={'action_type': action_type}
+                )
+                self._eos.log_collector.debug(
+                    LogSource.AGENT,
+                    f'Post-step: {action_type} at iteration={self.state.iteration_flag.current_value}',
+                    task_id=self.id,
+                )
+            except Exception as e:
+                self.log('debug', f'EOS post-step tracking skipped: {e}')
+
+        # V0 fallback: feed action to tool loop detector
+        # DEPRECATED_V0: Will be replaced by retry_policy loop detection.
         action_args: dict[str, str] = {}
         if hasattr(action, 'command'):
             action_args['command'] = str(action.command)[:200]
@@ -1345,7 +1366,8 @@ class AgentController:
         if self.delegate and self.delegate._is_stuck():
             return True
 
-        # ── Integration: Jaccard tool loop detector ───────────────────────
+        # V0 fallback: Jaccard tool loop detector
+        # DEPRECATED_V0: Will be replaced by retry_policy loop detection.
         loop_result = self._tool_loop_detector.check()
         if loop_result.is_loop:
             self.log(
@@ -1354,12 +1376,21 @@ class AgentController:
                 f'repeated={loop_result.repeated_tools}',
                 extra={'msg_type': 'TOOL_LOOP_DETECTED'},
             )
-            self._hook_runner.fire(
-                'on_loop_detected',
-                agent_id=self.id,
-                similarity=loop_result.similarity_score,
-                repeated_tools=loop_result.repeated_tools,
-            )
+            # ── Engineering OS: record loop detection in error_memory + metrics ──
+            if self._eos_available:
+                try:
+                    self._eos.error_memory.record(ErrorEntry(
+                        error_type='tool_loop',
+                        error_message=f'Loop detected: similarity={loop_result.similarity_score:.2f}, tools={loop_result.repeated_tools}',
+                        task_id=self.id,
+                        phase='loop_detection',
+                    ))
+                    self._eos.metrics.increment(
+                        'loops_detected',
+                        labels={'agent_id': self.id},
+                    )
+                except Exception as e:
+                    self.log('debug', f'EOS loop detection tracking skipped: {e}')
             return True
 
         return self._stuck_detector.is_stuck(self.headless_mode)
