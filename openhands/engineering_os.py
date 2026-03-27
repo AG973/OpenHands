@@ -382,6 +382,9 @@ class EngineeringOS:
                     entry.path: entry
                     for entry in indexed
                 } if isinstance(indexed, list) else indexed
+                dep_graph = self._dep_graph.to_dict() if hasattr(self._dep_graph, 'to_dict') else {}
+                test_map = self._test_mapper.to_dict() if hasattr(self._test_mapper, 'to_dict') else {}
+                api_map = self._api_mapper.to_dict() if hasattr(self._api_mapper, 'to_dict') else {}
             except Exception:
                 pass
 

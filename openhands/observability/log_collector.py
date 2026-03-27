@@ -101,7 +101,7 @@ class LogCollector:
     def __init__(self, max_entries: int = 10000) -> None:
         self._entries: list[LogEntry] = []
         self._max_entries = max_entries
-        self._by_task: dict[str, list[int]] = {}
+        self._by_task: dict[str, list[LogEntry]] = {}
         self._error_count = 0
 
     def log(
@@ -128,13 +128,12 @@ class LogCollector:
             data=data or {},
         )
 
-        idx = len(self._entries)
         self._entries.append(entry)
 
         if task_id:
             if task_id not in self._by_task:
                 self._by_task[task_id] = []
-            self._by_task[task_id].append(idx)
+            self._by_task[task_id].append(entry)
 
         if level in (LogLevel.ERROR, LogLevel.CRITICAL):
             self._error_count += 1
@@ -163,12 +162,7 @@ class LogCollector:
 
     def get_by_task(self, task_id: str) -> list[LogEntry]:
         """Get all logs for a specific task."""
-        indices = self._by_task.get(task_id, [])
-        return [
-            self._entries[i]
-            for i in indices
-            if i < len(self._entries)
-        ]
+        return list(self._by_task.get(task_id, []))
 
     def get_by_source(self, source: LogSource, limit: int = 100) -> list[LogEntry]:
         """Get logs from a specific source."""
