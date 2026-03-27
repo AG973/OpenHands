@@ -1,32 +1,43 @@
-"""Execution Engine — deterministic task lifecycle for the engineering operating system.
+"""Execution Engine — the canonical task lifecycle for CODEIT OS.
 
-This is the CORE of the system. All tasks flow through the execution engine's
-state machine: INTAKE -> CONTEXT_BUILD -> REPO_ANALYSIS -> PLAN -> EXECUTE ->
-TEST -> FAILURE_ANALYSIS -> RETRY_OR_FIX -> REVIEW -> ARTIFACT_GENERATION -> COMPLETE.
+This package contains the core execution pipeline that drives every task
+from intake to completion. It replaces the legacy AgentController step loop
+with a deterministic, phase-driven execution graph.
 
-This module replaces the reactive AgentController loop with a deterministic,
-graph-driven execution pipeline.
+Modules:
+    task_models: Core data structures (Task, TaskContext, TaskResult)
+    task_state_machine: Deterministic phase transitions
+    task_runner: Phase handler execution
+    task_engine: Central orchestrator
 """
 
+from openhands.execution.task_engine import TaskEngine
 from openhands.execution.task_models import (
     Task,
     TaskArtifact,
     TaskContext,
     TaskPriority,
     TaskResult,
+    TaskType,
 )
-from openhands.execution.task_state_machine import TaskPhase, TaskStateMachine
-from openhands.execution.task_runner import TaskRunner
-from openhands.execution.task_engine import TaskEngine
+from openhands.execution.task_runner import PhaseResult, TaskRunner
+from openhands.execution.task_state_machine import (
+    TaskPhase,
+    TaskStateMachine,
+    TransitionError,
+)
 
 __all__ = [
-    'Task',
-    'TaskArtifact',
-    'TaskContext',
     'TaskEngine',
-    'TaskPhase',
-    'TaskPriority',
-    'TaskResult',
     'TaskRunner',
     'TaskStateMachine',
+    'TaskPhase',
+    'TransitionError',
+    'Task',
+    'TaskContext',
+    'TaskResult',
+    'TaskArtifact',
+    'TaskType',
+    'TaskPriority',
+    'PhaseResult',
 ]

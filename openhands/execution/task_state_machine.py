@@ -2,7 +2,8 @@
 
 Defines the ONLY execution path a task can follow:
 INTAKE -> CONTEXT_BUILD -> REPO_ANALYSIS -> PLAN -> EXECUTE -> TEST ->
-FAILURE_ANALYSIS -> RETRY_OR_FIX -> REVIEW -> ARTIFACT_GENERATION -> COMPLETE
+(FAILURE_ANALYSIS -> RETRY_OR_FIX -> back to EXECUTE)* ->
+REVIEW -> ARTIFACT_GENERATION -> COMPLETE
 
 No shortcuts. No skipping phases. Every transition is logged and validated.
 """
@@ -17,7 +18,7 @@ from openhands.core.logger import openhands_logger as logger
 
 
 class TaskPhase(Enum):
-    """Ordered phases of task execution. This is the ONLY execution path."""
+    """Ordered phases of task execution."""
 
     INTAKE = 'intake'
     CONTEXT_BUILD = 'context_build'
@@ -36,11 +37,15 @@ class TaskPhase(Enum):
 
 # Valid phase transitions — enforced strictly
 _VALID_TRANSITIONS: dict[TaskPhase, list[TaskPhase]] = {
-    TaskPhase.INTAKE: [TaskPhase.CONTEXT_BUILD, TaskPhase.CANCELLED],
+    TaskPhase.INTAKE: [TaskPhase.CONTEXT_BUILD, TaskPhase.FAILED, TaskPhase.CANCELLED],
     TaskPhase.CONTEXT_BUILD: [TaskPhase.REPO_ANALYSIS, TaskPhase.FAILED],
     TaskPhase.REPO_ANALYSIS: [TaskPhase.PLAN, TaskPhase.FAILED],
     TaskPhase.PLAN: [TaskPhase.EXECUTE, TaskPhase.FAILED],
-    TaskPhase.EXECUTE: [TaskPhase.TEST, TaskPhase.FAILURE_ANALYSIS, TaskPhase.FAILED],
+    TaskPhase.EXECUTE: [
+        TaskPhase.TEST,
+        TaskPhase.FAILURE_ANALYSIS,
+        TaskPhase.FAILED,
+    ],
     TaskPhase.TEST: [
         TaskPhase.REVIEW,
         TaskPhase.FAILURE_ANALYSIS,
@@ -167,12 +172,6 @@ class TaskStateMachine:
     ) -> None:
         """Transition to a new phase. Validates the transition is allowed.
 
-        Args:
-            target: The phase to transition to
-            success: Whether the current phase completed successfully
-            error: Error message if not successful
-            metadata: Additional metadata for the phase record
-
         Raises:
             TransitionError: If the transition is not valid
         """
@@ -214,7 +213,6 @@ class TaskStateMachine:
         return self._retry_count < self._max_retries
 
     def set_max_retries(self, max_retries: int) -> None:
-        """Set max retry count."""
         self._max_retries = max_retries
 
     def get_phase_durations(self) -> dict[str, float]:

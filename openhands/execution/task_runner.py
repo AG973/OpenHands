@@ -1,16 +1,15 @@
 """Task Runner — executes individual phases of the task lifecycle.
 
-Each phase has a dedicated handler method. The runner is called by the
-TaskEngine for each phase transition. Phase handlers receive the full
-TaskContext and return success/failure with artifacts.
-
-This is where the actual work happens — LLM calls, tool execution,
-test running, PR generation, etc.
+Each phase has a dedicated handler that receives the Task and its context,
+performs the phase work, and returns a PhaseResult. Handlers can be
+overridden by registering custom callables for any phase.
 """
 
 from __future__ import annotations
 
 import time
+import traceback
+from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
 from openhands.core.logger import openhands_logger as logger
@@ -19,420 +18,616 @@ from openhands.execution.task_models import (
     Task,
     TaskArtifact,
     TaskContext,
-    TaskResult,
+    TaskType,
 )
 from openhands.execution.task_state_machine import TaskPhase
+
+
+@dataclass
+class PhaseResult:
+    """Result of executing a single phase."""
+
+    phase: TaskPhase
+    success: bool = True
+    output: dict[str, Any] = field(default_factory=dict)
+    error: str = ''
+    duration_s: float = 0.0
+    artifacts: list[TaskArtifact] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            'phase': self.phase.value,
+            'success': self.success,
+            'output': self.output,
+            'error': self.error,
+            'duration_s': self.duration_s,
+            'artifacts': [a.to_dict() for a in self.artifacts],
+        }
 
 
 class PhaseHandler(Protocol):
     """Protocol for phase handler callables."""
 
-    def __call__(
-        self, task: Task, context: TaskContext
-    ) -> PhaseResult: ...
-
-
-class PhaseResult:
-    """Result of executing a single phase."""
-
-    __slots__ = ('success', 'error', 'artifacts', 'metadata', 'next_phase_hint')
-
-    def __init__(
-        self,
-        success: bool = True,
-        error: str = '',
-        artifacts: list[TaskArtifact] | None = None,
-        metadata: dict[str, Any] | None = None,
-        next_phase_hint: TaskPhase | None = None,
-    ) -> None:
-        self.success = success
-        self.error = error
-        self.artifacts = artifacts or []
-        self.metadata = metadata or {}
-        self.next_phase_hint = next_phase_hint
+    def __call__(self, task: Task) -> PhaseResult: ...
 
 
 class TaskRunner:
     """Executes individual phases of the task lifecycle.
 
-    The runner maintains a registry of phase handlers. Each handler
-    receives the task and its context, and returns a PhaseResult.
+    Maintains a registry of phase handlers. Each phase has a default
+    implementation that can be overridden by registering a custom handler.
 
-    Custom handlers can be registered to override default behavior,
-    enabling extensibility without modifying core code.
+    Integration points:
+        - set_context_builder(fn): Override CONTEXT_BUILD phase
+        - set_repo_analyzer(fn): Override REPO_ANALYSIS phase
+        - set_planner(fn): Override PLAN phase
+        - set_executor(fn): Override EXECUTE phase
+        - set_tester(fn): Override TEST phase
+        - set_failure_analyzer(fn): Override FAILURE_ANALYSIS phase
+        - set_fixer(fn): Override RETRY_OR_FIX phase
+        - set_reviewer(fn): Override REVIEW phase
+        - set_artifact_generator(fn): Override ARTIFACT_GENERATION phase
     """
 
     def __init__(self) -> None:
-        self._phase_handlers: dict[TaskPhase, Callable[..., PhaseResult]] = {}
-        self._pre_phase_hooks: list[Callable[[TaskPhase, Task], None]] = []
-        self._post_phase_hooks: list[Callable[[TaskPhase, Task, PhaseResult], None]] = []
+        self._handlers: dict[TaskPhase, Callable[[Task], PhaseResult]] = {
+            TaskPhase.INTAKE: self._handle_intake,
+            TaskPhase.CONTEXT_BUILD: self._handle_context_build,
+            TaskPhase.REPO_ANALYSIS: self._handle_repo_analysis,
+            TaskPhase.PLAN: self._handle_plan,
+            TaskPhase.EXECUTE: self._handle_execute,
+            TaskPhase.TEST: self._handle_test,
+            TaskPhase.FAILURE_ANALYSIS: self._handle_failure_analysis,
+            TaskPhase.RETRY_OR_FIX: self._handle_retry_or_fix,
+            TaskPhase.REVIEW: self._handle_review,
+            TaskPhase.ARTIFACT_GENERATION: self._handle_artifact_generation,
+        }
 
-        # Register default handlers
-        self._register_defaults()
+        # External integration callables (set by EngineeringOS or caller)
+        self._context_builder: Callable[[Task], dict[str, Any]] | None = None
+        self._repo_analyzer: Callable[[Task], dict[str, Any]] | None = None
+        self._planner: Callable[[Task], list[dict[str, Any]]] | None = None
+        self._executor: Callable[[Task], dict[str, Any]] | None = None
+        self._tester: Callable[[Task], dict[str, Any]] | None = None
+        self._failure_analyzer: Callable[[Task], dict[str, Any]] | None = None
+        self._fixer: Callable[[Task], dict[str, Any]] | None = None
+        self._reviewer: Callable[[Task], dict[str, Any]] | None = None
+        self._artifact_generator: Callable[[Task], list[TaskArtifact]] | None = None
 
-    def register_handler(
-        self, phase: TaskPhase, handler: Callable[..., PhaseResult]
+    # ── Integration setters ──────────────────────────────────────────────
+
+    def set_context_builder(
+        self, fn: Callable[[Task], dict[str, Any]]
     ) -> None:
-        """Register a custom handler for a phase.
+        self._context_builder = fn
 
-        Args:
-            phase: The phase this handler processes
-            handler: Callable that takes (task, context) and returns PhaseResult
-        """
-        self._phase_handlers[phase] = handler
-        logger.info(f'Registered custom handler for phase {phase.value}')
-
-    def add_pre_phase_hook(
-        self, hook: Callable[[TaskPhase, Task], None]
+    def set_repo_analyzer(
+        self, fn: Callable[[Task], dict[str, Any]]
     ) -> None:
-        """Add a hook that runs before each phase execution."""
-        self._pre_phase_hooks.append(hook)
+        self._repo_analyzer = fn
 
-    def add_post_phase_hook(
-        self, hook: Callable[[TaskPhase, Task, PhaseResult], None]
+    def set_planner(
+        self, fn: Callable[[Task], list[dict[str, Any]]]
     ) -> None:
-        """Add a hook that runs after each phase execution."""
-        self._post_phase_hooks.append(hook)
+        self._planner = fn
+
+    def set_executor(self, fn: Callable[[Task], dict[str, Any]]) -> None:
+        self._executor = fn
+
+    def set_tester(self, fn: Callable[[Task], dict[str, Any]]) -> None:
+        self._tester = fn
+
+    def set_failure_analyzer(
+        self, fn: Callable[[Task], dict[str, Any]]
+    ) -> None:
+        self._failure_analyzer = fn
+
+    def set_fixer(self, fn: Callable[[Task], dict[str, Any]]) -> None:
+        self._fixer = fn
+
+    def set_reviewer(self, fn: Callable[[Task], dict[str, Any]]) -> None:
+        self._reviewer = fn
+
+    def set_artifact_generator(
+        self, fn: Callable[[Task], list[TaskArtifact]]
+    ) -> None:
+        self._artifact_generator = fn
+
+    # ── Core execution ───────────────────────────────────────────────────
 
     def run_phase(self, phase: TaskPhase, task: Task) -> PhaseResult:
-        """Execute a phase for the given task.
+        """Execute a single phase for the given task.
 
         Args:
             phase: The phase to execute
             task: The task being processed
 
         Returns:
-            PhaseResult with success/failure and any artifacts
+            PhaseResult with success/failure and output data
         """
-        handler = self._phase_handlers.get(phase)
+        handler = self._handlers.get(phase)
         if handler is None:
-            logger.warning(f'No handler registered for phase {phase.value}')
             return PhaseResult(
-                success=True,
-                metadata={'note': f'No handler for {phase.value}, passing through'},
-            )
-
-        # Run pre-phase hooks
-        for hook in self._pre_phase_hooks:
-            try:
-                hook(phase, task)
-            except Exception as e:
-                logger.warning(f'Pre-phase hook error for {phase.value}: {e}')
-
-        # Execute the phase handler
-        start_time = time.time()
-        try:
-            result = handler(task, task.context)
-            duration = time.time() - start_time
-
-            logger.info(
-                f'[TaskRunner] Phase {phase.value} completed in {duration:.2f}s '
-                f'(success={result.success})'
-            )
-
-            # Add execution trace artifact
-            result.artifacts.append(
-                TaskArtifact(
-                    artifact_type=ArtifactType.EXECUTION_TRACE,
-                    name=f'phase_{phase.value}_trace',
-                    content=f'Phase {phase.value}: success={result.success}, '
-                    f'duration={duration:.2f}s, error={result.error or "none"}',
-                    metadata={
-                        'phase': phase.value,
-                        'duration_s': duration,
-                        'success': result.success,
-                    },
-                )
-            )
-
-        except Exception as e:
-            duration = time.time() - start_time
-            logger.error(
-                f'[TaskRunner] Phase {phase.value} crashed after {duration:.2f}s: {e}'
-            )
-            result = PhaseResult(
+                phase=phase,
                 success=False,
-                error=f'{type(e).__name__}: {str(e)}',
+                error=f'No handler registered for phase {phase.value}',
+            )
+
+        start = time.time()
+        try:
+            result = handler(task)
+            result.duration_s = time.time() - start
+            logger.info(
+                f'[TaskRunner] Phase {phase.value} completed: '
+                f'success={result.success}, duration={result.duration_s:.2f}s'
+            )
+            return result
+        except Exception as exc:
+            duration = time.time() - start
+            error_msg = f'{type(exc).__name__}: {exc}'
+            logger.error(
+                f'[TaskRunner] Phase {phase.value} failed: {error_msg}'
+            )
+            return PhaseResult(
+                phase=phase,
+                success=False,
+                error=error_msg,
+                duration_s=duration,
                 artifacts=[
                     TaskArtifact(
                         artifact_type=ArtifactType.ERROR_REPORT,
-                        name=f'phase_{phase.value}_crash',
-                        content=f'Phase {phase.value} crashed: {e}',
-                        metadata={'exception_type': type(e).__name__},
+                        name=f'{phase.value}_error',
+                        content=traceback.format_exc(),
                     )
                 ],
             )
 
-        # Run post-phase hooks
-        for hook in self._post_phase_hooks:
-            try:
-                hook(phase, task, result)
-            except Exception as e:
-                logger.warning(f'Post-phase hook error for {phase.value}: {e}')
+    def register_handler(
+        self, phase: TaskPhase, handler: Callable[[Task], PhaseResult]
+    ) -> None:
+        """Register a custom handler for a phase."""
+        self._handlers[phase] = handler
 
-        # Collect artifacts into task result
-        for artifact in result.artifacts:
-            task.result.add_artifact(artifact)
+    # ── Default phase handlers ───────────────────────────────────────────
 
-        # Record phase result
-        task.result.set_phase_result(
-            phase.value, result.success, result.error or result.metadata.get('note', '')
-        )
-
-        return result
-
-    def _register_defaults(self) -> None:
-        """Register default phase handlers."""
-        self._phase_handlers[TaskPhase.INTAKE] = self._handle_intake
-        self._phase_handlers[TaskPhase.CONTEXT_BUILD] = self._handle_context_build
-        self._phase_handlers[TaskPhase.REPO_ANALYSIS] = self._handle_repo_analysis
-        self._phase_handlers[TaskPhase.PLAN] = self._handle_plan
-        self._phase_handlers[TaskPhase.EXECUTE] = self._handle_execute
-        self._phase_handlers[TaskPhase.TEST] = self._handle_test
-        self._phase_handlers[TaskPhase.FAILURE_ANALYSIS] = self._handle_failure_analysis
-        self._phase_handlers[TaskPhase.RETRY_OR_FIX] = self._handle_retry_or_fix
-        self._phase_handlers[TaskPhase.REVIEW] = self._handle_review
-        self._phase_handlers[TaskPhase.ARTIFACT_GENERATION] = (
-            self._handle_artifact_generation
-        )
-
-    # ── Default Phase Handlers ──────────────────────────────────────────
-
-    def _handle_intake(self, task: Task, context: TaskContext) -> PhaseResult:
+    def _handle_intake(self, task: Task) -> PhaseResult:
         """INTAKE: Validate and classify the incoming task.
 
-        - Validate task has required fields
-        - Classify task type if not set
-        - Set defaults for configuration
+        - Ensures task has title and description
+        - Auto-classifies task type if not set
+        - Sets up initial context
         """
+        errors: list[str] = []
+
         if not task.title and not task.description:
+            errors.append('Task must have a title or description')
+
+        if errors:
             return PhaseResult(
+                phase=TaskPhase.INTAKE,
                 success=False,
-                error='Task must have a title or description',
+                error='; '.join(errors),
             )
 
-        # Set task context reference
-        context.task_id = task.task_id
+        # Auto-classify task type from description keywords
+        if task.task_type == TaskType.CUSTOM and task.description:
+            desc_lower = task.description.lower()
+            if any(w in desc_lower for w in ['fix', 'bug', 'error', 'crash']):
+                task.task_type = TaskType.BUG_FIX
+            elif any(w in desc_lower for w in ['add', 'feature', 'implement', 'create']):
+                task.task_type = TaskType.FEATURE
+            elif any(w in desc_lower for w in ['refactor', 'clean', 'reorganize']):
+                task.task_type = TaskType.REFACTOR
+            elif any(w in desc_lower for w in ['test', 'spec', 'coverage']):
+                task.task_type = TaskType.TEST
+            elif any(w in desc_lower for w in ['doc', 'readme', 'comment']):
+                task.task_type = TaskType.DOCUMENTATION
+
+        # Initialize context with task ID
+        task.context.task_id = task.task_id
 
         logger.info(
-            f'[Intake] Task {task.task_id}: {task.title or task.description[:50]}'
+            f'[TaskRunner] INTAKE: task={task.task_id}, '
+            f'type={task.task_type.value}, priority={task.priority.value}'
         )
+
         return PhaseResult(
+            phase=TaskPhase.INTAKE,
             success=True,
-            metadata={
+            output={
                 'task_type': task.task_type.value,
                 'priority': task.priority.value,
+                'has_repo': bool(task.context.repo_path),
             },
         )
 
-    def _handle_context_build(
-        self, task: Task, context: TaskContext
-    ) -> PhaseResult:
-        """CONTEXT_BUILD: Gather context from memory, config, and environment.
+    def _handle_context_build(self, task: Task) -> PhaseResult:
+        """CONTEXT_BUILD: Gather context from memory subsystems.
 
-        - Load error memory for similar past failures
-        - Load fix memory for known solutions
-        - Load decision memory for past choices
-        - Gather available tools
+        If a context_builder integration is set, delegates to it.
+        Otherwise, creates a minimal context from available task data.
         """
-        logger.info(f'[ContextBuild] Building context for task {task.task_id}')
+        if self._context_builder:
+            try:
+                context_data = self._context_builder(task)
+                task.context.error_memory = context_data.get('error_memory', [])
+                task.context.fix_memory = context_data.get('fix_memory', [])
+                task.context.decision_memory = context_data.get('decision_memory', [])
+                task.context.repo_memory = context_data.get('repo_memory', {})
+                logger.info(
+                    f'[TaskRunner] CONTEXT_BUILD: loaded '
+                    f'{len(task.context.error_memory)} errors, '
+                    f'{len(task.context.fix_memory)} fixes from memory'
+                )
+                return PhaseResult(
+                    phase=TaskPhase.CONTEXT_BUILD,
+                    success=True,
+                    output=context_data,
+                )
+            except Exception as exc:
+                logger.warning(
+                    f'[TaskRunner] CONTEXT_BUILD integration failed: {exc}, '
+                    f'falling back to default'
+                )
 
-        # Context is populated by external integrations (memory system, etc.)
-        # The default handler validates that minimum context exists
+        # Default: minimal context from task data
         return PhaseResult(
+            phase=TaskPhase.CONTEXT_BUILD,
             success=True,
-            metadata={
-                'error_memory_count': len(context.error_memory),
-                'fix_memory_count': len(context.fix_memory),
-                'tools_available': len(context.available_tools),
+            output={
+                'source': 'default',
+                'repo_path': task.context.repo_path,
+                'repo_name': task.context.repo_name,
             },
         )
 
-    def _handle_repo_analysis(
-        self, task: Task, context: TaskContext
-    ) -> PhaseResult:
-        """REPO_ANALYSIS: Analyze the repository structure.
+    def _handle_repo_analysis(self, task: Task) -> PhaseResult:
+        """REPO_ANALYSIS: Analyze repository structure and dependencies.
 
-        - Build file map
-        - Extract dependency graph
-        - Map tests to source files
-        - Identify impact radius
+        If a repo_analyzer integration is set, delegates to it.
+        Otherwise, creates minimal repo context.
         """
-        logger.info(
-            f'[RepoAnalysis] Analyzing repo for task {task.task_id}: '
-            f'{context.repo_path or "no repo"}'
-        )
+        if self._repo_analyzer:
+            try:
+                repo_data = self._repo_analyzer(task)
+                task.context.file_map = repo_data.get('file_map', {})
+                task.context.dependency_graph = repo_data.get('dependency_graph', {})
+                task.context.test_map = repo_data.get('test_map', {})
+                task.context.api_map = repo_data.get('api_map', {})
+                task.context.impact_files = repo_data.get('impact_files', [])
+                task.context.service_boundaries = repo_data.get('service_boundaries', [])
+                logger.info(
+                    f'[TaskRunner] REPO_ANALYSIS: '
+                    f'{len(task.context.file_map)} files, '
+                    f'{len(task.context.dependency_graph)} deps, '
+                    f'{len(task.context.test_map)} test mappings'
+                )
+                return PhaseResult(
+                    phase=TaskPhase.REPO_ANALYSIS,
+                    success=True,
+                    output=repo_data,
+                )
+            except Exception as exc:
+                logger.warning(
+                    f'[TaskRunner] REPO_ANALYSIS integration failed: {exc}, '
+                    f'falling back to default'
+                )
 
-        if not context.repo_path:
-            return PhaseResult(
-                success=True,
-                metadata={'note': 'No repo path — skipping repo analysis'},
-            )
-
-        # Repo analysis is performed by the RepoIntelligence module
-        # Results are stored in context.file_map, context.dependency_graph, etc.
+        # Default: no repo analysis (still succeeds — repo intel is optional)
         return PhaseResult(
+            phase=TaskPhase.REPO_ANALYSIS,
             success=True,
-            metadata={
-                'file_count': len(context.file_map),
-                'dependency_count': len(context.dependency_graph),
-                'test_count': len(context.test_map),
-            },
+            output={'source': 'default', 'repo_path': task.context.repo_path},
         )
 
-    def _handle_plan(self, task: Task, context: TaskContext) -> PhaseResult:
-        """PLAN: Create an execution plan for the task.
+    def _handle_plan(self, task: Task) -> PhaseResult:
+        """PLAN: Create execution plan from task + context.
 
-        Uses the LangGraphPlanner to decompose the task into steps.
-        The plan is stored in the task metadata for execution.
+        If a planner integration is set, delegates to it.
+        Otherwise, creates a single-step plan.
         """
-        logger.info(f'[Plan] Creating execution plan for task {task.task_id}')
+        if self._planner:
+            try:
+                plan_steps = self._planner(task)
+                task.context.plan_steps = plan_steps
+                logger.info(
+                    f'[TaskRunner] PLAN: generated {len(plan_steps)} steps'
+                )
+                return PhaseResult(
+                    phase=TaskPhase.PLAN,
+                    success=True,
+                    output={'plan_steps': plan_steps},
+                )
+            except Exception as exc:
+                logger.warning(
+                    f'[TaskRunner] PLAN integration failed: {exc}, '
+                    f'falling back to default'
+                )
 
-        # Planning is performed by the planner agent role
-        # The default handler creates a single-step plan
+        # Default: single-step plan
+        default_plan = [
+            {
+                'step': 1,
+                'action': 'execute',
+                'description': task.description or task.title,
+                'type': task.task_type.value,
+            }
+        ]
+        task.context.plan_steps = default_plan
         return PhaseResult(
+            phase=TaskPhase.PLAN,
             success=True,
-            metadata={'plan_steps': 1, 'plan_type': 'default_single_step'},
+            output={'plan_steps': default_plan, 'source': 'default'},
         )
 
-    def _handle_execute(self, task: Task, context: TaskContext) -> PhaseResult:
+    def _handle_execute(self, task: Task) -> PhaseResult:
         """EXECUTE: Run the actual implementation work.
 
-        This is where the coder agent role does the work:
-        - Generate code changes
-        - Apply patches
-        - Run commands
-        - Create files
+        This is the core phase — an executor integration MUST be set
+        for real work to happen. Without it, the phase succeeds as a
+        no-op (useful for dry runs and testing).
         """
-        logger.info(f'[Execute] Executing task {task.task_id}')
+        if self._executor:
+            try:
+                exec_result = self._executor(task)
+                logger.info(
+                    f'[TaskRunner] EXECUTE: completed with '
+                    f'{len(exec_result)} output keys'
+                )
+                return PhaseResult(
+                    phase=TaskPhase.EXECUTE,
+                    success=exec_result.get('success', True),
+                    output=exec_result,
+                    error=exec_result.get('error', ''),
+                )
+            except Exception as exc:
+                return PhaseResult(
+                    phase=TaskPhase.EXECUTE,
+                    success=False,
+                    error=f'Executor failed: {exc}',
+                    artifacts=[
+                        TaskArtifact(
+                            artifact_type=ArtifactType.ERROR_REPORT,
+                            name='execute_error',
+                            content=traceback.format_exc(),
+                        )
+                    ],
+                )
 
-        # Execution is performed by the coder agent role
-        # The default handler is a pass-through for external wiring
+        # Default: no-op (dry run mode)
+        logger.info('[TaskRunner] EXECUTE: no executor set, dry-run mode')
         return PhaseResult(
+            phase=TaskPhase.EXECUTE,
             success=True,
-            metadata={'note': 'Execution delegated to agent role system'},
+            output={'mode': 'dry_run', 'executor': 'none'},
         )
 
-    def _handle_test(self, task: Task, context: TaskContext) -> PhaseResult:
-        """TEST: Run tests against the changes.
+    def _handle_test(self, task: Task) -> PhaseResult:
+        """TEST: Run tests against changes.
 
-        - Run test suite
-        - Capture test output
-        - Determine pass/fail
+        If a tester integration is set, delegates to it.
+        If require_tests is False, skips testing.
         """
-        logger.info(f'[Test] Running tests for task {task.task_id}')
-
         if not task.require_tests:
+            logger.info('[TaskRunner] TEST: skipped (require_tests=False)')
             return PhaseResult(
+                phase=TaskPhase.TEST,
                 success=True,
-                metadata={'note': 'Tests not required for this task'},
+                output={'skipped': True, 'reason': 'require_tests=False'},
             )
 
-        # Testing is performed by the tester agent role
+        if self._tester:
+            try:
+                test_result = self._tester(task)
+                success = test_result.get('success', True)
+                logger.info(
+                    f'[TaskRunner] TEST: '
+                    f'passed={test_result.get("passed", 0)}, '
+                    f'failed={test_result.get("failed", 0)}'
+                )
+                artifacts = []
+                if 'output' in test_result:
+                    artifacts.append(
+                        TaskArtifact(
+                            artifact_type=ArtifactType.TEST_RESULT,
+                            name='test_output',
+                            content=str(test_result['output'])[:5000],
+                        )
+                    )
+                return PhaseResult(
+                    phase=TaskPhase.TEST,
+                    success=success,
+                    output=test_result,
+                    error=test_result.get('error', ''),
+                    artifacts=artifacts,
+                )
+            except Exception as exc:
+                return PhaseResult(
+                    phase=TaskPhase.TEST,
+                    success=False,
+                    error=f'Tester failed: {exc}',
+                )
+
+        # Default: no tester set, pass
+        logger.info('[TaskRunner] TEST: no tester set, skipping')
         return PhaseResult(
+            phase=TaskPhase.TEST,
             success=True,
-            metadata={'note': 'Testing delegated to agent role system'},
+            output={'skipped': True, 'reason': 'no_tester_set'},
         )
 
-    def _handle_failure_analysis(
-        self, task: Task, context: TaskContext
-    ) -> PhaseResult:
+    def _handle_failure_analysis(self, task: Task) -> PhaseResult:
         """FAILURE_ANALYSIS: Analyze why execution or tests failed.
 
-        - Classify the error
-        - Search error memory for similar past failures
-        - Determine if retry is possible
-        - Suggest fix strategy
+        Classifies the error and determines retry strategy.
         """
-        logger.info(f'[FailureAnalysis] Analyzing failure for task {task.task_id}')
-
         last_error = task.result.error
-        can_retry = task.result.can_retry
+
+        if self._failure_analyzer:
+            try:
+                analysis = self._failure_analyzer(task)
+                logger.info(
+                    f'[TaskRunner] FAILURE_ANALYSIS: '
+                    f'category={analysis.get("category", "unknown")}'
+                )
+                return PhaseResult(
+                    phase=TaskPhase.FAILURE_ANALYSIS,
+                    success=True,
+                    output=analysis,
+                )
+            except Exception as exc:
+                logger.warning(
+                    f'[TaskRunner] FAILURE_ANALYSIS integration failed: {exc}'
+                )
+
+        # Default: basic error classification
+        category = 'unknown'
+        if last_error:
+            error_lower = last_error.lower()
+            if 'syntax' in error_lower or 'parse' in error_lower:
+                category = 'syntax_error'
+            elif 'import' in error_lower or 'module' in error_lower:
+                category = 'import_error'
+            elif 'test' in error_lower or 'assert' in error_lower:
+                category = 'test_failure'
+            elif 'timeout' in error_lower:
+                category = 'timeout'
+            elif 'permission' in error_lower or 'auth' in error_lower:
+                category = 'permission_error'
+            else:
+                category = 'runtime_error'
+
+        task.result.error_category = category
 
         return PhaseResult(
+            phase=TaskPhase.FAILURE_ANALYSIS,
             success=True,
-            metadata={
-                'last_error': last_error,
-                'can_retry': can_retry,
+            output={
+                'category': category,
+                'original_error': last_error[:500] if last_error else '',
+                'retry_recommended': category in (
+                    'timeout',
+                    'runtime_error',
+                    'test_failure',
+                ),
+            },
+        )
+
+    def _handle_retry_or_fix(self, task: Task) -> PhaseResult:
+        """RETRY_OR_FIX: Apply fix strategy and prepare for retry.
+
+        If a fixer integration is set, delegates to it.
+        Otherwise, just signals readiness to retry.
+        """
+        if self._fixer:
+            try:
+                fix_result = self._fixer(task)
+                logger.info(
+                    f'[TaskRunner] RETRY_OR_FIX: '
+                    f'strategy={fix_result.get("strategy", "unknown")}'
+                )
+                return PhaseResult(
+                    phase=TaskPhase.RETRY_OR_FIX,
+                    success=fix_result.get('success', True),
+                    output=fix_result,
+                )
+            except Exception as exc:
+                return PhaseResult(
+                    phase=TaskPhase.RETRY_OR_FIX,
+                    success=False,
+                    error=f'Fixer failed: {exc}',
+                )
+
+        # Default: signal retry with no fix applied
+        return PhaseResult(
+            phase=TaskPhase.RETRY_OR_FIX,
+            success=True,
+            output={
+                'strategy': 'retry_without_fix',
                 'retry_count': task.result.retry_count,
             },
-            next_phase_hint=(
-                TaskPhase.RETRY_OR_FIX if can_retry else TaskPhase.FAILED
-            ),
         )
 
-    def _handle_retry_or_fix(
-        self, task: Task, context: TaskContext
-    ) -> PhaseResult:
-        """RETRY_OR_FIX: Apply fix and retry execution.
+    def _handle_review(self, task: Task) -> PhaseResult:
+        """REVIEW: Review changes before finalizing.
 
-        - Apply suggested fix from failure analysis
-        - Increment retry counter
-        - Loop back to EXECUTE phase
+        If a reviewer integration is set, delegates to it.
+        Otherwise, auto-approves.
         """
-        task.result.retry_count += 1
-        logger.info(
-            f'[RetryOrFix] Retry #{task.result.retry_count} for task {task.task_id}'
-        )
-
-        return PhaseResult(
-            success=True,
-            metadata={'retry_number': task.result.retry_count},
-            next_phase_hint=TaskPhase.EXECUTE,
-        )
-
-    def _handle_review(self, task: Task, context: TaskContext) -> PhaseResult:
-        """REVIEW: Review the changes before finalizing.
-
-        - Code quality check
-        - Security scan
-        - Style consistency
-        """
-        logger.info(f'[Review] Reviewing changes for task {task.task_id}')
-
         if not task.require_review:
+            logger.info('[TaskRunner] REVIEW: skipped (require_review=False)')
             return PhaseResult(
+                phase=TaskPhase.REVIEW,
                 success=True,
-                metadata={'note': 'Review not required for this task'},
+                output={'skipped': True, 'reason': 'require_review=False'},
             )
 
-        # Review is performed by the reviewer agent role
+        if self._reviewer:
+            try:
+                review_result = self._reviewer(task)
+                approved = review_result.get('approved', True)
+                logger.info(
+                    f'[TaskRunner] REVIEW: approved={approved}'
+                )
+                return PhaseResult(
+                    phase=TaskPhase.REVIEW,
+                    success=approved,
+                    output=review_result,
+                    error=review_result.get('rejection_reason', ''),
+                )
+            except Exception as exc:
+                logger.warning(f'[TaskRunner] REVIEW integration failed: {exc}')
+
+        # Default: auto-approve
+        logger.info('[TaskRunner] REVIEW: auto-approved (no reviewer set)')
         return PhaseResult(
+            phase=TaskPhase.REVIEW,
             success=True,
-            metadata={'note': 'Review delegated to agent role system'},
+            output={'approved': True, 'source': 'auto'},
         )
 
-    def _handle_artifact_generation(
-        self, task: Task, context: TaskContext
-    ) -> PhaseResult:
+    def _handle_artifact_generation(self, task: Task) -> PhaseResult:
         """ARTIFACT_GENERATION: Package results for delivery.
 
-        - Generate PR if configured
-        - Package diffs
-        - Generate execution report
-        - Bundle all artifacts
+        Generates execution trace artifact and delegates to artifact_generator
+        if one is set.
         """
-        logger.info(f'[ArtifactGen] Generating artifacts for task {task.task_id}')
+        artifacts: list[TaskArtifact] = []
 
-        # Generate summary artifact
-        summary = TaskArtifact(
+        # Always generate execution trace
+        trace_artifact = TaskArtifact(
             artifact_type=ArtifactType.EXECUTION_TRACE,
-            name='task_summary',
-            content=(
-                f'Task: {task.title}\n'
-                f'Type: {task.task_type.value}\n'
-                f'Duration: {task.duration_s:.2f}s\n'
-                f'Retries: {task.result.retry_count}\n'
-                f'Artifacts: {len(task.result.artifacts)}\n'
-            ),
-            metadata={
-                'task_id': task.task_id,
-                'duration_s': task.duration_s,
-            },
+            name='execution_trace',
+            content=str(task.result.phase_results),
         )
+        artifacts.append(trace_artifact)
+
+        if self._artifact_generator:
+            try:
+                generated = self._artifact_generator(task)
+                artifacts.extend(generated)
+                logger.info(
+                    f'[TaskRunner] ARTIFACT_GENERATION: '
+                    f'{len(generated)} artifacts generated'
+                )
+            except Exception as exc:
+                logger.warning(
+                    f'[TaskRunner] ARTIFACT_GENERATION integration failed: {exc}'
+                )
+                artifacts.append(
+                    TaskArtifact(
+                        artifact_type=ArtifactType.ERROR_REPORT,
+                        name='artifact_generation_error',
+                        content=str(exc),
+                    )
+                )
+
+        # Artifacts are returned in PhaseResult and collected by
+        # TaskEngine._execute_phase — do NOT add them here to avoid duplicates.
 
         return PhaseResult(
+            phase=TaskPhase.ARTIFACT_GENERATION,
             success=True,
-            artifacts=[summary],
-            metadata={'artifact_count': len(task.result.artifacts) + 1},
+            output={'artifact_count': len(artifacts)},
+            artifacts=artifacts,
         )

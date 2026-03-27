@@ -1,8 +1,8 @@
 """Task data models — the core data structures for the execution engine.
 
 Every task that enters the system is represented as a Task object with
-full context, artifacts, and results. These models are immutable records
-of what the system did, why, and what it produced.
+full context, artifacts, and results. These models are the single source
+of truth for what the system did, why, and what it produced.
 """
 
 from __future__ import annotations
@@ -64,9 +64,14 @@ class TaskArtifact:
     created_at: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict[str, Any]:
+        art_type = (
+            self.artifact_type.value
+            if isinstance(self.artifact_type, ArtifactType)
+            else str(self.artifact_type)
+        )
         return {
             'artifact_id': self.artifact_id,
-            'artifact_type': self.artifact_type.value,
+            'artifact_type': art_type,
             'name': self.name,
             'content': self.content[:500] if self.content else '',
             'path': self.path,
@@ -79,7 +84,7 @@ class TaskArtifact:
 class TaskContext:
     """Context gathered before execution — repo state, memory, analysis results.
 
-    This is built during CONTEXT_BUILD and REPO_ANALYSIS phases and passed
+    Built during CONTEXT_BUILD and REPO_ANALYSIS phases and passed
     to all subsequent phases so they have full situational awareness.
     """
 
@@ -90,17 +95,21 @@ class TaskContext:
     base_branch: str = 'main'
 
     # Repo intelligence results (populated during REPO_ANALYSIS)
-    file_map: dict[str, str] = field(default_factory=dict)
+    file_map: dict[str, Any] = field(default_factory=dict)
     dependency_graph: dict[str, list[str]] = field(default_factory=dict)
     test_map: dict[str, list[str]] = field(default_factory=dict)
     api_map: dict[str, dict[str, Any]] = field(default_factory=dict)
     impact_files: list[str] = field(default_factory=list)
+    service_boundaries: list[dict[str, Any]] = field(default_factory=list)
 
     # Memory context (populated during CONTEXT_BUILD)
     error_memory: list[dict[str, Any]] = field(default_factory=list)
     fix_memory: list[dict[str, Any]] = field(default_factory=list)
     decision_memory: list[dict[str, Any]] = field(default_factory=list)
     repo_memory: dict[str, Any] = field(default_factory=dict)
+
+    # Plan (populated during PLAN phase)
+    plan_steps: list[dict[str, Any]] = field(default_factory=list)
 
     # Environment info
     runtime_id: str = ''
@@ -122,6 +131,7 @@ class TaskContext:
             'dependency_count': len(self.dependency_graph),
             'test_count': len(self.test_map),
             'impact_files': self.impact_files[:10],
+            'plan_step_count': len(self.plan_steps),
             'available_tools': self.available_tools,
             'model_name': self.model_name,
             'provider': self.provider,
@@ -189,7 +199,7 @@ class Task:
     description: str = ''
     task_type: TaskType = TaskType.CUSTOM
     priority: TaskPriority = TaskPriority.NORMAL
-    source: str = 'user'  # user, issue, automated, retry
+    source: str = 'user'
 
     # Relationships
     parent_task_id: str = ''
