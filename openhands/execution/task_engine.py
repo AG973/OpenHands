@@ -109,7 +109,9 @@ class TaskEngine:
 
         task.result.max_retries = max_retries
         self._tasks[task.task_id] = task
-        self._state_machines[task.task_id] = TaskStateMachine(task.task_id)
+        sm = TaskStateMachine(task.task_id)
+        sm.set_max_retries(max_retries)
+        self._state_machines[task.task_id] = sm
 
         logger.info(
             f'[TaskEngine] Task submitted: {task.task_id} — "{title}"'

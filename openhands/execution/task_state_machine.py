@@ -37,7 +37,7 @@ class TaskPhase(Enum):
 
 # Valid phase transitions — enforced strictly
 _VALID_TRANSITIONS: dict[TaskPhase, list[TaskPhase]] = {
-    TaskPhase.INTAKE: [TaskPhase.CONTEXT_BUILD, TaskPhase.CANCELLED],
+    TaskPhase.INTAKE: [TaskPhase.CONTEXT_BUILD, TaskPhase.FAILED, TaskPhase.CANCELLED],
     TaskPhase.CONTEXT_BUILD: [TaskPhase.REPO_ANALYSIS, TaskPhase.FAILED],
     TaskPhase.REPO_ANALYSIS: [TaskPhase.PLAN, TaskPhase.FAILED],
     TaskPhase.PLAN: [TaskPhase.EXECUTE, TaskPhase.FAILED],
