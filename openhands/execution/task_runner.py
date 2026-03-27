@@ -622,9 +622,8 @@ class TaskRunner:
                     )
                 )
 
-        # Add all artifacts to task result
-        for artifact in artifacts:
-            task.result.add_artifact(artifact)
+        # Artifacts are returned in PhaseResult and collected by
+        # TaskEngine._execute_phase — do NOT add them here to avoid duplicates.
 
         return PhaseResult(
             phase=TaskPhase.ARTIFACT_GENERATION,
