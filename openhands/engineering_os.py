@@ -382,6 +382,9 @@ class EngineeringOS:
                     entry.path: entry
                     for entry in indexed
                 } if isinstance(indexed, list) else indexed
+                dep_graph = self._dep_graph.to_dict() if hasattr(self._dep_graph, 'to_dict') else {}
+                test_map = self._test_mapper.to_dict() if hasattr(self._test_mapper, 'to_dict') else {}
+                api_map = self._api_mapper.to_dict() if hasattr(self._api_mapper, 'to_dict') else {}
             except Exception:
                 pass
 
@@ -410,7 +413,13 @@ class EngineeringOS:
     def _detect_language(self, file_map: Any) -> str:
         """Detect the primary language of the repository."""
         extensions: dict[str, int] = {}
-        entries = file_map if isinstance(file_map, list) else []
+        # Handle RepoIndex (dict of path->FileEntry), list, or fallback
+        if hasattr(file_map, 'files') and isinstance(file_map.files, dict):
+            entries = list(file_map.files.values())
+        elif isinstance(file_map, list):
+            entries = file_map
+        else:
+            entries = []
         for entry in entries:
             ext = getattr(entry, 'extension', '') or ''
             if ext:

@@ -49,8 +49,9 @@ class Artifact:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        art_type = self.artifact_type.value if isinstance(self.artifact_type, ArtifactType) else str(self.artifact_type)
         return {
-            'type': self.artifact_type.value,
+            'type': art_type,
             'name': self.name,
             'file_path': self.file_path,
             'size_bytes': self.size_bytes,
