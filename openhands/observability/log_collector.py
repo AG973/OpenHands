@@ -117,6 +117,13 @@ class LogCollector:
         """Add a log entry."""
         if len(self._entries) >= self._max_entries:
             self._entries = self._entries[self._max_entries // 2:]
+            # Rebuild _by_task index to drop references to evicted entries
+            remaining = set(id(e) for e in self._entries)
+            self._by_task = {
+                tid: [e for e in entries if id(e) in remaining]
+                for tid, entries in self._by_task.items()
+                if any(id(e) in remaining for e in entries)
+            }
 
         entry = LogEntry(
             level=level,
