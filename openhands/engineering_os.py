@@ -413,7 +413,13 @@ class EngineeringOS:
     def _detect_language(self, file_map: Any) -> str:
         """Detect the primary language of the repository."""
         extensions: dict[str, int] = {}
-        entries = file_map if isinstance(file_map, list) else []
+        # Handle RepoIndex (dict of path->FileEntry), list, or fallback
+        if hasattr(file_map, 'files') and isinstance(file_map.files, dict):
+            entries = list(file_map.files.values())
+        elif isinstance(file_map, list):
+            entries = file_map
+        else:
+            entries = []
         for entry in entries:
             ext = getattr(entry, 'extension', '') or ''
             if ext:
