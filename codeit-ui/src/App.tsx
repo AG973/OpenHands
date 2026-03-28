@@ -916,13 +916,13 @@ function App() {
         attempts++
         try {
           const conv = await apiGet<ConversationMeta>(`/api/conversations/${convId}`)
-          if (conv.status === 'RUNNING' || attempts > 30) {
+          if (conv.status === 'RUNNING' || attempts > 90) {
             clearInterval(poll)
             try { await apiPost(`/api/conversations/${convId}/start`, { providers_set: [] }) } catch { /* may already be started */ }
             connectToConversation(convId, true)  // preserve optimistic message
             loadConversations()
           }
-        } catch { if (attempts > 30) clearInterval(poll) }
+        } catch { if (attempts > 90) clearInterval(poll) }
       }, 2000)
     } catch (err) {
       console.error('Failed to create conversation:', err)
@@ -948,8 +948,8 @@ function App() {
           attempts++
           try {
             const c = await apiGet<ConversationMeta>(`/api/conversations/${convId}`)
-            if (c.status === 'RUNNING' || attempts > 30) { clearInterval(poll); connectToConversation(convId) }
-          } catch { if (attempts > 30) clearInterval(poll) }
+            if (c.status === 'RUNNING' || attempts > 90) { clearInterval(poll); connectToConversation(convId) }
+          } catch { if (attempts > 90) clearInterval(poll) }
         }, 2000)
       }
     } catch { connectToConversation(convId) }
