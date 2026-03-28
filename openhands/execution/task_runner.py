@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import subprocess
 import time
 import traceback
@@ -1228,7 +1229,7 @@ class TaskRunner:
             step_id=sid,
             action='shell_command',
             description='Commit the bug fix',
-            commands=['git add -A', 'git commit -m "fix: {desc}"'.format(desc=desc[:60])],
+            commands=['git add -A', f'git commit -m {shlex.quote("fix: " + desc[:60])}'],
             tools_allowed=['shell_exec', 'git_commit'],
             dependencies=[str(sid - 1)],
             decision_reasoning='Commit verified fix',
@@ -1302,7 +1303,7 @@ class TaskRunner:
             step_id=sid,
             action='shell_command',
             description='Commit feature implementation',
-            commands=['git add -A', f'git commit -m "feat: {desc[:60]}"'],
+            commands=['git add -A', f'git commit -m {shlex.quote("feat: " + desc[:60])}'],
             tools_allowed=['shell_exec', 'git_commit'],
             dependencies=[str(sid - 1)],
             decision_reasoning='Commit verified feature',
@@ -1375,7 +1376,7 @@ class TaskRunner:
             step_id=sid,
             action='shell_command',
             description='Commit refactoring',
-            commands=['git add -A', f'git commit -m "refactor: {desc[:60]}"'],
+            commands=['git add -A', f'git commit -m {shlex.quote("refactor: " + desc[:60])}'],
             tools_allowed=['shell_exec', 'git_commit'],
             dependencies=[str(sid - 1)],
             decision_reasoning='Commit verified refactor with no regressions',
@@ -1434,7 +1435,7 @@ class TaskRunner:
             step_id=sid,
             action='shell_command',
             description='Commit new tests',
-            commands=['git add -A', f'git commit -m "test: {desc[:60]}"'],
+            commands=['git add -A', f'git commit -m {shlex.quote("test: " + desc[:60])}'],
             tools_allowed=['shell_exec', 'git_commit'],
             dependencies=[str(sid - 1)],
             decision_reasoning='Commit passing tests',
@@ -1495,7 +1496,7 @@ class TaskRunner:
             step_id=sid,
             action='shell_command',
             description='Commit changes',
-            commands=['git add -A', f'git commit -m "chore: {desc[:60]}"'],
+            commands=['git add -A', f'git commit -m {shlex.quote("chore: " + desc[:60])}'],
             tools_allowed=['shell_exec', 'git_commit'],
             dependencies=[str(sid - 1)],
             decision_reasoning='Commit verified work',
@@ -1869,7 +1870,7 @@ class TaskRunner:
             return ErrorCategory.SYNTAX_ERROR
         if any(w in lower for w in ['import', 'module', 'no module named']):
             return ErrorCategory.IMPORT_ERROR
-        if any(w in lower for w in ['type', 'not callable', 'not subscriptable']):
+        if any(w in lower for w in ['type error', 'not callable', 'not subscriptable']):
             return ErrorCategory.TYPE_ERROR
         if any(w in lower for w in ['assert', 'test fail', 'expected', 'failed']):
             if 'test' in lower:
