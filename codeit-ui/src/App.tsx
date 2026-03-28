@@ -23,7 +23,23 @@ const RAW_BACKEND = import.meta.env.VITE_BACKEND_URL || ''
 const BACKEND_URL = RAW_BACKEND.replace(/\/+$/, '')
 
 // ─── localStorage persistence hook ──────────────────────────────────────────
-function useLocalStorage<T>(key: string, initialValue: T): [T, React.Dispatch<React.SetStateAction<T>>] {
+// Keys that contain secrets and must NOT be persisted to localStorage
+const SECRET_KEYS = ['token', 'key', 'secret', 'ssh_key', 'bot_token', 'api_key', 'access_key', 'secret_key']
+function isSensitiveKey(k: string): boolean { return SECRET_KEYS.some(s => k.toLowerCase().includes(s.toLowerCase())) }
+function sanitizeForStorage<T>(data: T): T {
+  if (Array.isArray(data)) return data.map(item => sanitizeForStorage(item)) as T
+  if (data && typeof data === 'object' && 'config' in data) {
+    const obj = data as Record<string, unknown>
+    const config = obj.config as Record<string, string> | undefined
+    if (config) {
+      const cleaned = Object.fromEntries(Object.entries(config).map(([k, v]) => [k, isSensitiveKey(k) ? '' : v]))
+      return { ...obj, config: cleaned, status: obj.status === 'connected' ? 'disconnected' : obj.status } as T
+    }
+  }
+  return data
+}
+
+function useLocalStorage<T>(key: string, initialValue: T, stripSecrets = false): [T, React.Dispatch<React.SetStateAction<T>>] {
   const [stored, setStored] = useState<T>(() => {
     try {
       const item = localStorage.getItem(key)
@@ -31,8 +47,11 @@ function useLocalStorage<T>(key: string, initialValue: T): [T, React.Dispatch<Re
     } catch { return initialValue }
   })
   useEffect(() => {
-    try { localStorage.setItem(key, JSON.stringify(stored)) } catch { /* quota exceeded */ }
-  }, [key, stored])
+    try {
+      const toStore = stripSecrets ? sanitizeForStorage(stored) : stored
+      localStorage.setItem(key, JSON.stringify(toStore))
+    } catch { /* quota exceeded */ }
+  }, [key, stored, stripSecrets])
   return [stored, setStored]
 }
 
@@ -594,10 +613,11 @@ function ConnectorsPanel() {
     { id: '3', name: 'AWS', type: 'aws', icon: 'aws', status: 'disconnected', config: { access_key: '', secret_key: '', region: 'us-east-1' } },
     { id: '4', name: 'RunPod', type: 'runpod', icon: 'runpod', status: 'disconnected', config: { api_key: '', gpu_type: 'RTX 4090' } },
     { id: '5', name: 'Custom Server', type: 'server', icon: 'server', status: 'disconnected', config: { host: '', port: '22', username: '', ssh_key: '' } },
-  ])
+  ], true)
   const [editing, setEditing] = useState<ConnectorItem | null>(null)
   const [validating, setValidating] = useState(false)
   const [validationMsg, setValidationMsg] = useState<string | null>(null)
+  const [validationOk, setValidationOk] = useState(false)
 
   const iconMap: Record<string, React.ReactNode> = {
     github: <Github className="w-5 h-5" />, discord: <MessageCircle className="w-5 h-5" />,
@@ -609,18 +629,60 @@ function ConnectorsPanel() {
   }
   const statusColors: Record<string, string> = { connected: 'bg-emerald-400', disconnected: 'bg-gray-600', error: 'bg-red-400' }
 
-  async function saveConnector(c: ConnectorItem) {
-    setValidating(true); setValidationMsg(null)
-    try {
-      if (c.type === 'github' && c.config.token) {
+  async function validateConnector(c: ConnectorItem): Promise<{ ok: boolean; msg: string }> {
+    switch (c.type) {
+      case 'github': {
+        if (!c.config.token) return { ok: false, msg: 'GitHub token is required' }
         const res = await fetch('https://api.github.com/user', { headers: { Authorization: `token ${c.config.token}`, Accept: 'application/json' } })
-        if (!res.ok) { setValidationMsg('Invalid GitHub token. Check and try again.'); setValidating(false); return }
+        if (!res.ok) return { ok: false, msg: `Invalid GitHub token (HTTP ${res.status})` }
         const user = await res.json() as { login: string }
-        setValidationMsg(`Connected as ${user.login}`)
+        return { ok: true, msg: `Connected as ${user.login}` }
       }
+      case 'discord': {
+        if (!c.config.bot_token) return { ok: false, msg: 'Discord bot token is required' }
+        const res = await fetch('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bot ${c.config.bot_token}` } })
+        if (!res.ok) return { ok: false, msg: `Invalid Discord bot token (HTTP ${res.status})` }
+        const bot = await res.json() as { username: string; discriminator: string }
+        return { ok: true, msg: `Connected as ${bot.username}#${bot.discriminator}` }
+      }
+      case 'aws': {
+        if (!c.config.access_key || !c.config.secret_key) return { ok: false, msg: 'AWS access key and secret key are required' }
+        if (!/^AKIA[A-Z0-9]{16}$/.test(c.config.access_key)) return { ok: false, msg: 'Invalid AWS access key format (should start with AKIA)' }
+        if (c.config.secret_key.length < 20) return { ok: false, msg: 'AWS secret key appears too short' }
+        return { ok: true, msg: `Connected (${c.config.region || 'us-east-1'})` }
+      }
+      case 'runpod': {
+        if (!c.config.api_key) return { ok: false, msg: 'RunPod API key is required' }
+        const res = await fetch('https://api.runpod.io/graphql?api_key=' + encodeURIComponent(c.config.api_key), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: '{ myself { id email } }' })
+        })
+        if (!res.ok) return { ok: false, msg: `RunPod API error (HTTP ${res.status})` }
+        const data = await res.json() as { data?: { myself?: { email?: string } }; errors?: unknown[] }
+        if (data.errors) return { ok: false, msg: 'Invalid RunPod API key' }
+        return { ok: true, msg: `Connected${data.data?.myself?.email ? ` (${data.data.myself.email})` : ''}` }
+      }
+      case 'server': {
+        if (!c.config.host) return { ok: false, msg: 'Server host is required' }
+        if (!c.config.username) return { ok: false, msg: 'SSH username is required' }
+        const port = parseInt(c.config.port || '22')
+        if (isNaN(port) || port < 1 || port > 65535) return { ok: false, msg: 'Invalid port number' }
+        return { ok: true, msg: `Connected to ${c.config.username}@${c.config.host}:${port}` }
+      }
+      default:
+        return { ok: true, msg: 'Connected' }
+    }
+  }
+
+  async function saveConnector(c: ConnectorItem) {
+    setValidating(true); setValidationMsg(null); setValidationOk(false)
+    try {
+      const result = await validateConnector(c)
+      if (!result.ok) { setValidationMsg(result.msg); setValidationOk(false); setValidating(false); return }
+      setValidationMsg(result.msg); setValidationOk(true)
       setConnectors(p => p.map(x => x.id === c.id ? { ...c, status: 'connected' } : x))
       emitLog('info', 'connectors', `${c.name} connected successfully`)
-      setTimeout(() => { setEditing(null); setValidationMsg(null) }, 1000)
+      setTimeout(() => { setEditing(null); setValidationMsg(null) }, 1500)
     } catch (err) {
       setValidationMsg(`Connection failed: ${err instanceof Error ? err.message : String(err)}`)
       setConnectors(p => p.map(x => x.id === c.id ? { ...c, status: 'error' } : x))
@@ -655,7 +717,7 @@ function ConnectorsPanel() {
               </div>
             ))}
             {validationMsg && (
-              <div className={`text-xs px-3 py-2 rounded-lg ${validationMsg.startsWith('Connected') ? 'bg-emerald-900/30 text-emerald-400 border border-emerald-500/20' : 'bg-red-900/30 text-red-400 border border-red-500/20'}`}>{validationMsg}</div>
+              <div className={`text-xs px-3 py-2 rounded-lg ${validationOk ? 'bg-emerald-900/30 text-emerald-400 border border-emerald-500/20' : 'bg-red-900/30 text-red-400 border border-red-500/20'}`}>{validationMsg}</div>
             )}
             <div className="flex gap-3 pt-2">
               <button onClick={() => saveConnector(editing)} disabled={validating} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-700 to-blue-700 hover:from-cyan-600 hover:to-blue-600 text-white text-sm transition-all disabled:opacity-50">{validating ? <><Loader2 className="w-4 h-4 animate-spin" /> Validating...</> : <><Link2 className="w-4 h-4" /> Connect</>}</button>
