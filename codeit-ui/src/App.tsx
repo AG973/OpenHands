@@ -640,16 +640,15 @@ function ConnectorsPanel() {
       }
       case 'discord': {
         if (!c.config.bot_token) return { ok: false, msg: 'Discord bot token is required' }
-        const res = await fetch('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bot ${c.config.bot_token}` } })
-        if (!res.ok) return { ok: false, msg: `Invalid Discord bot token (HTTP ${res.status})` }
-        const bot = await res.json() as { username: string; discriminator: string }
-        return { ok: true, msg: `Connected as ${bot.username}#${bot.discriminator}` }
+        if (c.config.bot_token.length < 50) return { ok: false, msg: 'Discord bot token appears too short' }
+        if (!c.config.server_id && !c.config.channel_id) return { ok: true, msg: 'Bot token saved — add server/channel ID to enable messaging' }
+        return { ok: true, msg: `Bot token saved${c.config.server_id ? ` (server: ${c.config.server_id})` : ''} — will verify when used` }
       }
       case 'aws': {
         if (!c.config.access_key || !c.config.secret_key) return { ok: false, msg: 'AWS access key and secret key are required' }
         if (!/^AKIA[A-Z0-9]{16}$/.test(c.config.access_key)) return { ok: false, msg: 'Invalid AWS access key format (should start with AKIA)' }
         if (c.config.secret_key.length < 20) return { ok: false, msg: 'AWS secret key appears too short' }
-        return { ok: true, msg: `Connected (${c.config.region || 'us-east-1'})` }
+        return { ok: true, msg: `Saved (${c.config.region || 'us-east-1'}) — credentials not verified` }
       }
       case 'runpod': {
         if (!c.config.api_key) return { ok: false, msg: 'RunPod API key is required' }
@@ -667,7 +666,7 @@ function ConnectorsPanel() {
         if (!c.config.username) return { ok: false, msg: 'SSH username is required' }
         const port = parseInt(c.config.port || '22')
         if (isNaN(port) || port < 1 || port > 65535) return { ok: false, msg: 'Invalid port number' }
-        return { ok: true, msg: `Connected to ${c.config.username}@${c.config.host}:${port}` }
+        return { ok: true, msg: `Saved for ${c.config.username}@${c.config.host}:${port} — not verified` }
       }
       default:
         return { ok: true, msg: 'Connected' }
