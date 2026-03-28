@@ -1735,14 +1735,17 @@ class TaskRunner:
             return result
 
         # ── Parse pytest output ──
-        # "5 passed, 2 failed, 1 error in 3.45s"
+        # "5 passed, 2 failed, 1 error in 3.45s" or "2 failed in 1.23s"
         pytest_summary = re.search(
-            r'(\d+)\s+passed(?:,\s*(\d+)\s+failed)?(?:,\s*(\d+)\s+errors?)?'
-            r'(?:,\s*(\d+)\s+(?:skipped|deselected))?.*?in\s+([\d.]+)s',
+            r'(?:(?:(\d+)\s+passed)(?:,\s*)?)?'
+            r'(?:(?:(\d+)\s+failed)(?:,\s*)?)?'
+            r'(?:(?:(\d+)\s+errors?)(?:,\s*)?)?'
+            r'(?:(?:(\d+)\s+(?:skipped|deselected))(?:,\s*)?)?'
+            r'.*?in\s+([\d.]+)s',
             raw_output,
         )
         if pytest_summary:
-            result.passed = int(pytest_summary.group(1))
+            result.passed = int(pytest_summary.group(1) or 0)
             result.failed = int(pytest_summary.group(2) or 0)
             result.errors = int(pytest_summary.group(3) or 0)
             result.skipped = int(pytest_summary.group(4) or 0)
