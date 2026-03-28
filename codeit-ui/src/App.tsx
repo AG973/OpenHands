@@ -39,14 +39,21 @@ function sanitizeForStorage<T>(data: T): T {
   return data
 }
 
+// In-memory cache to preserve full unsanitized state across component unmounts
+const memoryCache = new Map<string, unknown>()
+
 function useLocalStorage<T>(key: string, initialValue: T, stripSecrets = false): [T, React.Dispatch<React.SetStateAction<T>>] {
   const [stored, setStored] = useState<T>(() => {
+    // Check memory cache first (survives component unmount/remount within same session)
+    if (memoryCache.has(key)) return memoryCache.get(key) as T
     try {
       const item = localStorage.getItem(key)
       return item ? (JSON.parse(item) as T) : initialValue
     } catch { return initialValue }
   })
   useEffect(() => {
+    // Always cache full unsanitized state in memory
+    memoryCache.set(key, stored)
     try {
       const toStore = stripSecrets ? sanitizeForStorage(stored) : stored
       localStorage.setItem(key, JSON.stringify(toStore))
