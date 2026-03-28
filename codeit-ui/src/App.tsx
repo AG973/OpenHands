@@ -22,6 +22,46 @@ import './App.css'
 const RAW_BACKEND = import.meta.env.VITE_BACKEND_URL || ''
 const BACKEND_URL = RAW_BACKEND.replace(/\/+$/, '')
 
+// ─── localStorage persistence hook ──────────────────────────────────────────
+// Keys that contain secrets and must NOT be persisted to localStorage
+const SECRET_KEYS = ['token', 'key', 'secret', 'ssh_key', 'bot_token', 'api_key', 'access_key', 'secret_key']
+function isSensitiveKey(k: string): boolean { return SECRET_KEYS.some(s => k.toLowerCase().includes(s.toLowerCase())) }
+function sanitizeForStorage<T>(data: T): T {
+  if (Array.isArray(data)) return data.map(item => sanitizeForStorage(item)) as T
+  if (data && typeof data === 'object' && 'config' in data) {
+    const obj = data as Record<string, unknown>
+    const config = obj.config as Record<string, string> | undefined
+    if (config) {
+      const cleaned = Object.fromEntries(Object.entries(config).map(([k, v]) => [k, isSensitiveKey(k) ? '' : v]))
+      return { ...obj, config: cleaned, status: obj.status === 'connected' ? 'disconnected' : obj.status } as T
+    }
+  }
+  return data
+}
+
+// In-memory cache to preserve full unsanitized state across component unmounts
+const memoryCache = new Map<string, unknown>()
+
+function useLocalStorage<T>(key: string, initialValue: T, stripSecrets = false): [T, React.Dispatch<React.SetStateAction<T>>] {
+  const [stored, setStored] = useState<T>(() => {
+    // Check memory cache first (survives component unmount/remount within same session)
+    if (memoryCache.has(key)) return memoryCache.get(key) as T
+    try {
+      const item = localStorage.getItem(key)
+      return item ? (JSON.parse(item) as T) : initialValue
+    } catch { return initialValue }
+  })
+  useEffect(() => {
+    // Always cache full unsanitized state in memory
+    memoryCache.set(key, stored)
+    try {
+      const toStore = stripSecrets ? sanitizeForStorage(stored) : stored
+      localStorage.setItem(key, JSON.stringify(toStore))
+    } catch { /* quota exceeded */ }
+  }, [key, stored, stripSecrets])
+  return [stored, setStored]
+}
+
 interface ChatMessage { id: number; role: 'user' | 'assistant' | 'system'; content: string; timestamp: string }
 interface AgentAction { id: number; type: 'command' | 'file_write' | 'file_edit' | 'browse' | 'think' | 'task' | 'other'; title: string; detail: string; status: 'running' | 'done' | 'error' }
 interface ConversationMeta { conversation_id: string; title: string; created_at: string; status: string }
@@ -359,7 +399,7 @@ function WelcomeHero({ onExampleClick }: { onExampleClick: (text: string) => voi
 
 /* ═══════════════ SKILLS PANEL ═══════════════ */
 function SkillsPanel() {
-  const [skills, setSkills] = useState<SkillItem[]>([
+  const [skills, setSkills] = useLocalStorage<SkillItem[]>('codeit_skills', [
     { id: '1', name: 'Code Review', description: 'Reviews code for best practices, security, and bugs', content: 'You are an expert code reviewer. Analyze code for security vulnerabilities, performance issues, style violations, and potential bugs. Suggest improvements with code examples.', enabled: true },
     { id: '2', name: 'Debug Assistant', description: 'Identifies and fixes bugs in code', content: 'You are a debugging expert. Help reproduce issues, identify root causes using systematic analysis, and suggest targeted fixes with minimal side effects.', enabled: true },
     { id: '3', name: 'Project Setup', description: 'Sets up new projects with best practices', content: 'You are a project setup specialist. Use modern frameworks, configure linting, testing, CI/CD pipelines, and follow community best practices for project structure.', enabled: false },
@@ -428,7 +468,7 @@ function SkillsPanel() {
 
 /* ═══════════════ KNOWLEDGE PANEL ═══════════════ */
 function KnowledgePanel() {
-  const [items, setItems] = useState<KnowledgeItem[]>([
+  const [items, setItems] = useLocalStorage<KnowledgeItem[]>('codeit_knowledge', [
     { id: '1', title: 'Project Architecture', content: 'Frontend: React + Vite + Tailwind CSS. Backend: Python FastAPI with OpenHands agent framework. LLM: Local Ollama with GLM-4.7-flash. Deployment: Docker containers with Nginx reverse proxy.', tags: ['architecture', 'system'], updated_at: '2024-03-20' },
     { id: '2', title: 'Deployment Guide', content: '1. Build frontend with npm run build\n2. Deploy via Docker compose\n3. Configure Ollama endpoint\n4. Set environment variables\n5. Run docker-compose up -d', tags: ['deployment', 'ops'], updated_at: '2024-03-19' },
     { id: '3', title: 'Coding Standards', content: 'TypeScript strict mode enabled. ESLint + Prettier for formatting. Conventional commits required. PR reviews mandatory. Unit tests for all new features. Integration tests for API endpoints.', tags: ['standards', 'quality'], updated_at: '2024-03-18' },
@@ -508,7 +548,7 @@ function KnowledgePanel() {
 
 /* ═══════════════ PROMPTS PANEL ═══════════════ */
 function PromptsPanel() {
-  const [prompts, setPrompts] = useState<PromptItem[]>([
+  const [prompts, setPrompts] = useLocalStorage<PromptItem[]>('codeit_prompts', [
     { id: '1', name: 'Default System Prompt', content: 'You are a helpful AI coding assistant powered by CODEIT. You can write code, create files, run commands, build applications, and deploy them to servers. Always explain your approach before acting.', active: true },
     { id: '2', name: 'Strict Code Quality', content: 'Follow strict coding standards: TypeScript strict mode, comprehensive error handling, unit tests for all functions, meaningful variable names, JSDoc comments, and SOLID principles.', active: false },
     { id: '3', name: 'Non-Developer Friendly', content: 'You are helping a non-technical user. Use simple language, avoid jargon, explain every concept in plain terms. Provide step-by-step instructions that anyone can follow without technical knowledge.', active: false },
@@ -574,14 +614,17 @@ function PromptsPanel() {
 
 /* ═══════════════ CONNECTORS PANEL ═══════════════ */
 function ConnectorsPanel() {
-  const [connectors, setConnectors] = useState<ConnectorItem[]>([
+  const [connectors, setConnectors] = useLocalStorage<ConnectorItem[]>('codeit_connectors', [
     { id: '1', name: 'GitHub', type: 'github', icon: 'github', status: 'disconnected', config: { token: '', org: '', default_branch: 'main' } },
     { id: '2', name: 'Discord', type: 'discord', icon: 'discord', status: 'disconnected', config: { bot_token: '', server_id: '', channel_id: '' } },
     { id: '3', name: 'AWS', type: 'aws', icon: 'aws', status: 'disconnected', config: { access_key: '', secret_key: '', region: 'us-east-1' } },
     { id: '4', name: 'RunPod', type: 'runpod', icon: 'runpod', status: 'disconnected', config: { api_key: '', gpu_type: 'RTX 4090' } },
     { id: '5', name: 'Custom Server', type: 'server', icon: 'server', status: 'disconnected', config: { host: '', port: '22', username: '', ssh_key: '' } },
-  ])
+  ], true)
   const [editing, setEditing] = useState<ConnectorItem | null>(null)
+  const [validating, setValidating] = useState(false)
+  const [validationMsg, setValidationMsg] = useState<string | null>(null)
+  const [validationOk, setValidationOk] = useState(false)
 
   const iconMap: Record<string, React.ReactNode> = {
     github: <Github className="w-5 h-5" />, discord: <MessageCircle className="w-5 h-5" />,
@@ -593,8 +636,69 @@ function ConnectorsPanel() {
   }
   const statusColors: Record<string, string> = { connected: 'bg-emerald-400', disconnected: 'bg-gray-600', error: 'bg-red-400' }
 
-  function saveConnector(c: ConnectorItem) { setConnectors(p => p.map(x => x.id === c.id ? { ...c, status: 'connected' } : x)); setEditing(null) }
-  function disconnect(id: string) { setConnectors(p => p.map(c => c.id === id ? { ...c, status: 'disconnected', config: Object.fromEntries(Object.keys(c.config).map(k => [k, ''])) } : c)) }
+  async function validateConnector(c: ConnectorItem): Promise<{ ok: boolean; msg: string }> {
+    switch (c.type) {
+      case 'github': {
+        if (!c.config.token) return { ok: false, msg: 'GitHub token is required' }
+        const res = await fetch('https://api.github.com/user', { headers: { Authorization: `token ${c.config.token}`, Accept: 'application/json' } })
+        if (!res.ok) return { ok: false, msg: `Invalid GitHub token (HTTP ${res.status})` }
+        const user = await res.json() as { login: string }
+        return { ok: true, msg: `Connected as ${user.login}` }
+      }
+      case 'discord': {
+        if (!c.config.bot_token) return { ok: false, msg: 'Discord bot token is required' }
+        if (c.config.bot_token.length < 50) return { ok: false, msg: 'Discord bot token appears too short' }
+        if (!c.config.server_id && !c.config.channel_id) return { ok: true, msg: 'Bot token saved — add server/channel ID to enable messaging' }
+        return { ok: true, msg: `Bot token saved${c.config.server_id ? ` (server: ${c.config.server_id})` : ''} — will verify when used` }
+      }
+      case 'aws': {
+        if (!c.config.access_key || !c.config.secret_key) return { ok: false, msg: 'AWS access key and secret key are required' }
+        if (!/^AKIA[A-Z0-9]{16}$/.test(c.config.access_key)) return { ok: false, msg: 'Invalid AWS access key format (should start with AKIA)' }
+        if (c.config.secret_key.length < 20) return { ok: false, msg: 'AWS secret key appears too short' }
+        return { ok: true, msg: `Saved (${c.config.region || 'us-east-1'}) — credentials not verified` }
+      }
+      case 'runpod': {
+        if (!c.config.api_key) return { ok: false, msg: 'RunPod API key is required' }
+        const res = await fetch('https://api.runpod.io/graphql?api_key=' + encodeURIComponent(c.config.api_key), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: '{ myself { id email } }' })
+        })
+        if (!res.ok) return { ok: false, msg: `RunPod API error (HTTP ${res.status})` }
+        const data = await res.json() as { data?: { myself?: { email?: string } }; errors?: unknown[] }
+        if (data.errors) return { ok: false, msg: 'Invalid RunPod API key' }
+        return { ok: true, msg: `Connected${data.data?.myself?.email ? ` (${data.data.myself.email})` : ''}` }
+      }
+      case 'server': {
+        if (!c.config.host) return { ok: false, msg: 'Server host is required' }
+        if (!c.config.username) return { ok: false, msg: 'SSH username is required' }
+        const port = parseInt(c.config.port || '22')
+        if (isNaN(port) || port < 1 || port > 65535) return { ok: false, msg: 'Invalid port number' }
+        return { ok: true, msg: `Saved for ${c.config.username}@${c.config.host}:${port} — not verified` }
+      }
+      default:
+        return { ok: true, msg: 'Connected' }
+    }
+  }
+
+  async function saveConnector(c: ConnectorItem) {
+    setValidating(true); setValidationMsg(null); setValidationOk(false)
+    try {
+      const result = await validateConnector(c)
+      if (!result.ok) { setValidationMsg(result.msg); setValidationOk(false); setValidating(false); return }
+      setValidationMsg(result.msg); setValidationOk(true)
+      setConnectors(p => p.map(x => x.id === c.id ? { ...c, status: 'connected' } : x))
+      emitLog('info', 'connectors', `${c.name} connected successfully`)
+      setTimeout(() => { setEditing(null); setValidationMsg(null) }, 1500)
+    } catch (err) {
+      setValidationMsg(`Connection failed: ${err instanceof Error ? err.message : String(err)}`)
+      setConnectors(p => p.map(x => x.id === c.id ? { ...c, status: 'error' } : x))
+    }
+    setValidating(false)
+  }
+  function disconnect(id: string) {
+    setConnectors(p => p.map(c => c.id === id ? { ...c, status: 'disconnected', config: Object.fromEntries(Object.keys(c.config).map(k => [k, ''])) } : c))
+    emitLog('info', 'connectors', `Disconnected connector ${id}`)
+  }
 
   return (
     <div className="h-full flex flex-col">
@@ -618,9 +722,12 @@ function ConnectorsPanel() {
                   className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-cyan-500/50" />
               </div>
             ))}
+            {validationMsg && (
+              <div className={`text-xs px-3 py-2 rounded-lg ${validationOk ? 'bg-emerald-900/30 text-emerald-400 border border-emerald-500/20' : 'bg-red-900/30 text-red-400 border border-red-500/20'}`}>{validationMsg}</div>
+            )}
             <div className="flex gap-3 pt-2">
-              <button onClick={() => saveConnector(editing)} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-700 to-blue-700 hover:from-cyan-600 hover:to-blue-600 text-white text-sm transition-all"><Link2 className="w-4 h-4" /> Connect</button>
-              <button onClick={() => setEditing(null)} className="px-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-gray-400 hover:text-white text-sm transition-all">Cancel</button>
+              <button onClick={() => saveConnector(editing)} disabled={validating} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-700 to-blue-700 hover:from-cyan-600 hover:to-blue-600 text-white text-sm transition-all disabled:opacity-50">{validating ? <><Loader2 className="w-4 h-4 animate-spin" /> Validating...</> : <><Link2 className="w-4 h-4" /> Connect</>}</button>
+              <button onClick={() => { setEditing(null); setValidationMsg(null) }} className="px-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-gray-400 hover:text-white text-sm transition-all">Cancel</button>
             </div>
           </div>
         </div>
@@ -760,14 +867,21 @@ function LogsPanel() {
 }
 
 /* ═══════════════ DEPLOY PANEL ═══════════════ */
-function DeployPanel() {
+function DeployPanel({ onDeploy }: { onDeploy?: (msg: string) => void }) {
   const targets = [
-    { id: 'local', name: 'Local Server', desc: 'Deploy to your local machine or network', icon: <Server className="w-5 h-5" />, status: 'ready' as const },
-    { id: 'docker', name: 'Docker Container', desc: 'Build and run inside Docker container', icon: <Box className="w-5 h-5" />, status: 'ready' as const },
-    { id: 'aws', name: 'AWS (EC2 / ECS)', desc: 'Deploy to Amazon Web Services cloud', icon: <Cloud className="w-5 h-5" />, status: 'needs_config' as const },
-    { id: 'runpod', name: 'RunPod GPU', desc: 'Deploy to GPU cloud for ML workloads', icon: <Cpu className="w-5 h-5" />, status: 'needs_config' as const },
-    { id: 'custom', name: 'Custom Server', desc: 'Deploy via SSH to any remote server', icon: <Globe className="w-5 h-5" />, status: 'needs_config' as const },
+    { id: 'local', name: 'Local Server', desc: 'Deploy to your local machine or network', icon: <Server className="w-5 h-5" />, status: 'ready' as const, cmd: 'Deploy my app to the local server' },
+    { id: 'docker', name: 'Docker Container', desc: 'Build and run inside Docker container', icon: <Box className="w-5 h-5" />, status: 'ready' as const, cmd: 'Deploy my app to a Docker container' },
+    { id: 'aws', name: 'AWS (EC2 / ECS)', desc: 'Deploy to Amazon Web Services cloud', icon: <Cloud className="w-5 h-5" />, status: 'needs_config' as const, cmd: 'Deploy my app to AWS EC2' },
+    { id: 'runpod', name: 'RunPod GPU', desc: 'Deploy to GPU cloud for ML workloads', icon: <Cpu className="w-5 h-5" />, status: 'needs_config' as const, cmd: 'Deploy my app to RunPod GPU' },
+    { id: 'custom', name: 'Custom Server', desc: 'Deploy via SSH to any remote server', icon: <Globe className="w-5 h-5" />, status: 'needs_config' as const, cmd: 'Deploy my app to my custom server via SSH' },
   ]
+  const [deploying, setDeploying] = useState<string | null>(null)
+  function handleDeploy(t: typeof targets[0]) {
+    setDeploying(t.id)
+    if (onDeploy) onDeploy(t.cmd)
+    emitLog('info', 'deploy', `Deploy requested: ${t.name}`)
+    setTimeout(() => setDeploying(null), 2000)
+  }
   return (
     <div className="h-full flex flex-col">
       <div className="flex items-center justify-between px-6 py-4 border-b border-white/5">
@@ -782,11 +896,10 @@ function DeployPanel() {
               <div className="flex items-center gap-4">
                 <div className="w-12 h-12 rounded-xl bg-cyan-900/30 text-cyan-400 flex items-center justify-center flex-shrink-0">{t.icon}</div>
                 <div className="flex-1"><h3 className="text-sm font-medium text-white">{t.name}</h3><p className="text-xs text-gray-500 mt-0.5">{t.desc}</p></div>
-                {t.status === 'ready' ? (
-                  <button className="px-4 py-2 rounded-xl text-sm bg-gradient-to-r from-cyan-700 to-blue-700 hover:from-cyan-600 hover:to-blue-600 text-white transition-all flex items-center gap-2"><Rocket className="w-3.5 h-3.5" /> Deploy</button>
-                ) : (
-                  <button className="px-4 py-2 rounded-xl text-sm border border-white/10 text-gray-400 hover:text-white hover:bg-white/5 transition-all flex items-center gap-2"><Settings className="w-3.5 h-3.5" /> Configure</button>
-                )}
+                <button onClick={() => handleDeploy(t)} disabled={deploying === t.id}
+                  className={`px-4 py-2 rounded-xl text-sm transition-all flex items-center gap-2 ${t.status === 'ready' ? 'bg-gradient-to-r from-cyan-700 to-blue-700 hover:from-cyan-600 hover:to-blue-600 text-white' : 'border border-white/10 text-gray-400 hover:text-white hover:bg-white/5'} disabled:opacity-50`}>
+                  {deploying === t.id ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Deploying...</> : t.status === 'ready' ? <><Rocket className="w-3.5 h-3.5" /> Deploy</> : <><Settings className="w-3.5 h-3.5" /> Configure</>}
+                </button>
               </div>
             </div>
           ))}
@@ -794,9 +907,9 @@ function DeployPanel() {
             <h3 className="text-sm font-medium text-white mb-2 flex items-center gap-2"><Sparkles className="w-4 h-4 text-cyan-400" /> Quick Deploy via Chat</h3>
             <p className="text-xs text-gray-500">You can also deploy by chatting with the agent. Try saying:</p>
             <div className="mt-3 space-y-1.5">
-              <p className="text-xs text-cyan-400/70 font-mono bg-white/3 rounded-lg px-3 py-1.5">"Deploy my app to Docker"</p>
-              <p className="text-xs text-cyan-400/70 font-mono bg-white/3 rounded-lg px-3 py-1.5">"Deploy to my AWS EC2 instance"</p>
-              <p className="text-xs text-cyan-400/70 font-mono bg-white/3 rounded-lg px-3 py-1.5">"Push to my server at 192.168.1.100"</p>
+              {['Deploy my app to Docker', 'Deploy to my AWS EC2 instance', 'Push to my server at 192.168.1.100'].map(cmd => (
+                <button key={cmd} onClick={() => onDeploy?.(cmd)} className="w-full text-left text-xs text-cyan-400/70 font-mono bg-white/3 rounded-lg px-3 py-1.5 hover:bg-white/5 hover:text-cyan-400 transition-all cursor-pointer">"{cmd}"</button>
+              ))}
             </div>
           </div>
         </div>
@@ -1159,7 +1272,7 @@ function App() {
         ) : activeView === 'connectors' ? (
           <ConnectorsPanel />
         ) : activeView === 'deploy' ? (
-          <DeployPanel />
+          <DeployPanel onDeploy={(msg) => { setActiveView('chat'); setInput(msg); setTimeout(() => inputRef.current?.focus(), 100) }} />
         ) : activeView === 'logs' ? (
           <LogsPanel />
         ) : null}
