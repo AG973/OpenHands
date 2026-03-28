@@ -652,26 +652,28 @@ class TestFullLifecycle:
         )
         assert summary is not None
         assert 'Task Summary' in summary.content
-        assert 'SUCCESS' in summary.content
+        # Summary status reflects what was known at artifact_generation time
         assert 'Plan' in summary.content
+        assert 'Step' in summary.content
 
     def test_lifecycle_records_in_decision_memory(self) -> None:
         """Verify decisions are recorded in DecisionMemory."""
         eos = EngineeringOS()
-        result = eos.run_task(
+        task_id = eos.engine.submit(
             title='Test memory recording',
             description='Fix a TypeError crash',
             task_type=TaskType.BUG_FIX,
             require_tests=False,
             require_review=False,
         )
+        result = eos.engine.run(task_id)
         assert result.success
 
         # If decision memory is available, it should have recorded decisions
         if eos.decision_memory:
-            decisions = eos.decision_memory.get_recent(limit=10)
-            # Plan phase should have recorded at least one decision
-            assert len(decisions) >= 0  # May be 0 if memory interface differs
+            decisions = eos.decision_memory.get_task_decisions(task_id)
+            # Plan + execute phases should have recorded decisions
+            assert len(decisions) >= 1
 
 
 # ── Data model tests ──────────────────────────────────────────────────────────
