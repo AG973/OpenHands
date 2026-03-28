@@ -99,8 +99,9 @@ workspace_base = "/home/codeit/workspace"
 run_as_openhands = true
 
 [llm]
-model = "openai/glm-4.7-flash"
-base_url = "http://localhost:11434/v1"
+model = "ollama/llama3.2-vision:11b"
+provider = "ollama"
+base_url = "http://localhost:11434"
 api_key = "ollama"
 native_tool_calling = false
 max_input_tokens = 32768
@@ -117,8 +118,8 @@ echo "[7/7] Starting services..."
 # Backend
 cd "$OHDIR" || { echo "ERROR: Cannot cd to $OHDIR"; exit 1; }
 export SERVE_FRONTEND=false
-export LLM_MODEL="openai/glm-4.7-flash"
-export LLM_BASE_URL="http://localhost:11434/v1"
+export LLM_MODEL="ollama/llama3.2-vision:11b"
+export LLM_BASE_URL="http://localhost:11434"
 export LLM_API_KEY="ollama"
 export LLM_NATIVE_TOOL_CALLING="false"
 export WORKSPACE_BASE="$WORKSPACE"
