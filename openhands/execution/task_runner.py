@@ -1574,8 +1574,10 @@ class TaskRunner:
         if self._executor:
             # Pass step info to executor
             task.metadata['current_step'] = step.to_dict()
-            result = self._executor(task)
-            task.metadata.pop('current_step', None)
+            try:
+                result = self._executor(task)
+            finally:
+                task.metadata.pop('current_step', None)
             return result
 
         # Built-in step execution for known action types
