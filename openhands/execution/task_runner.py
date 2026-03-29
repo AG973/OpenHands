@@ -368,15 +368,70 @@ class TaskRunner:
                     f'falling back to default'
                 )
 
-        # Default: minimal context from task data
+        # Default: populate context directly from memory subsystems (Fix #8)
+        # Memory drives CONTEXT_BUILD — not just an optional integration.
+        context_data: dict[str, Any] = {
+            'source': 'memory_subsystems',
+            'repo_path': task.context.repo_path,
+            'repo_name': task.context.repo_name,
+        }
+
+        # Query ErrorMemory for past errors on this repo/task
+        if self._error_memory:
+            try:
+                recent_errors = self._error_memory.query(
+                    task_id=task.task_id,
+                    limit=10,
+                )
+                task.context.error_memory = [
+                    e.to_dict() if hasattr(e, 'to_dict') else str(e)
+                    for e in recent_errors
+                ]
+                context_data['error_memory_count'] = len(recent_errors)
+            except Exception as exc:
+                logger.debug(f'[TaskRunner] ErrorMemory query: {exc}')
+
+        # Query FixMemory for past successful fixes
+        if self._fix_memory:
+            try:
+                past_fixes = self._fix_memory.query(
+                    task_id=task.task_id,
+                    limit=10,
+                )
+                task.context.fix_memory = [
+                    f.to_dict() if hasattr(f, 'to_dict') else str(f)
+                    for f in past_fixes
+                ]
+                context_data['fix_memory_count'] = len(past_fixes)
+            except Exception as exc:
+                logger.debug(f'[TaskRunner] FixMemory query: {exc}')
+
+        # Query DecisionMemory for past decisions
+        if self._decision_memory:
+            try:
+                past_decisions = self._decision_memory.query(
+                    task_id=task.task_id,
+                    limit=10,
+                )
+                task.context.decision_memory = [
+                    d.to_dict() if hasattr(d, 'to_dict') else str(d)
+                    for d in past_decisions
+                ]
+                context_data['decision_memory_count'] = len(past_decisions)
+            except Exception as exc:
+                logger.debug(f'[TaskRunner] DecisionMemory query: {exc}')
+
+        logger.info(
+            f'[TaskRunner] CONTEXT_BUILD: populated from memory subsystems '
+            f'(errors={context_data.get("error_memory_count", 0)}, '
+            f'fixes={context_data.get("fix_memory_count", 0)}, '
+            f'decisions={context_data.get("decision_memory_count", 0)})'
+        )
+
         return PhaseResult(
             phase=TaskPhase.CONTEXT_BUILD,
             success=True,
-            output={
-                'source': 'default',
-                'repo_path': task.context.repo_path,
-                'repo_name': task.context.repo_name,
-            },
+            output=context_data,
         )
 
     def _handle_repo_analysis(self, task: Task) -> PhaseResult:
@@ -1000,20 +1055,94 @@ class TaskRunner:
     def _handle_retry_or_fix(self, task: Task) -> PhaseResult:
         """RETRY_OR_FIX: Apply fix strategy and prepare for retry.
 
-        If a fixer integration is set, delegates to it.
-        Otherwise, just signals readiness to retry.
+        Fix #8: RetryPolicy is consulted FIRST for the retry/escalate decision.
+        The policy drives whether we retry, apply a fix, or escalate — not just
+        a hardcoded retry count check.
+
+        Flow:
+        1. Consult RetryPolicy for decision (retry / escalate / abort)
+        2. If policy says retry AND fixer is available: apply fix first
+        3. If policy says retry without fixer: signal plain retry
+        4. If policy says escalate/abort: signal failure
+        5. Record decision in FixMemory for future reference
         """
+        retry_count = task.result.retry_count
+        max_retries = task.max_retries
+
+        # ── Step 1: Consult RetryPolicy (Fix #8) ──────────────────────────
+        policy_decision = 'retry'  # default if no policy
+        policy_reason = 'no policy configured'
+
+        if self._retry_policy:
+            try:
+                decision = self._retry_policy.should_retry(
+                    task_id=task.task_id,
+                    retry_count=retry_count,
+                    max_retries=max_retries,
+                    last_error=task.result.error or '',
+                )
+                # RetryPolicy returns a dict with 'action' and 'reason'
+                if isinstance(decision, dict):
+                    policy_decision = decision.get('action', 'retry')
+                    policy_reason = decision.get('reason', '')
+                elif isinstance(decision, bool):
+                    policy_decision = 'retry' if decision else 'escalate'
+                    policy_reason = 'policy boolean result'
+                else:
+                    policy_decision = str(decision)
+                    policy_reason = 'raw policy output'
+            except Exception as exc:
+                logger.warning(f'[TaskRunner] RetryPolicy failed: {exc}')
+                policy_decision = 'retry'
+                policy_reason = f'policy error, defaulting to retry: {exc}'
+
+        logger.info(
+            f'[TaskRunner] RETRY_OR_FIX: policy_decision={policy_decision}, '
+            f'reason={policy_reason}, retry_count={retry_count}/{max_retries}'
+        )
+
+        # ── Step 2: If policy says escalate/abort, stop ────────────────────
+        if policy_decision in ('escalate', 'abort', 'stop'):
+            return PhaseResult(
+                phase=TaskPhase.RETRY_OR_FIX,
+                success=False,
+                error=f'RetryPolicy: {policy_decision} — {policy_reason}',
+                output={
+                    'strategy': policy_decision,
+                    'policy_reason': policy_reason,
+                    'retry_count': retry_count,
+                },
+            )
+
+        # ── Step 3: Apply fix if fixer available ───────────────────────────
         if self._fixer:
             try:
                 fix_result = self._fixer(task)
+                strategy = fix_result.get('strategy', 'fix_applied')
                 logger.info(
-                    f'[TaskRunner] RETRY_OR_FIX: '
-                    f'strategy={fix_result.get("strategy", "unknown")}'
+                    f'[TaskRunner] RETRY_OR_FIX: fix applied, strategy={strategy}'
                 )
+
+                # Record in FixMemory for future reference (Fix #8)
+                if self._fix_memory:
+                    try:
+                        self._fix_memory.record(
+                            task_id=task.task_id,
+                            strategy=strategy,
+                            success=fix_result.get('success', True),
+                            error=task.result.error or '',
+                        )
+                    except Exception:
+                        pass
+
                 return PhaseResult(
                     phase=TaskPhase.RETRY_OR_FIX,
                     success=fix_result.get('success', True),
-                    output=fix_result,
+                    output={
+                        **fix_result,
+                        'policy_decision': policy_decision,
+                        'policy_reason': policy_reason,
+                    },
                 )
             except Exception as exc:
                 return PhaseResult(
@@ -1022,13 +1151,15 @@ class TaskRunner:
                     error=f'Fixer failed: {exc}',
                 )
 
-        # Default: signal retry with no fix applied
+        # ── Step 4: Plain retry (no fixer) ─────────────────────────────────
         return PhaseResult(
             phase=TaskPhase.RETRY_OR_FIX,
             success=True,
             output={
                 'strategy': 'retry_without_fix',
-                'retry_count': task.result.retry_count,
+                'policy_decision': policy_decision,
+                'policy_reason': policy_reason,
+                'retry_count': retry_count,
             },
         )
 

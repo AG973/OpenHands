@@ -183,14 +183,26 @@ class EngineeringOS:
         memory: Any = None,
         conversation_instructions: str | None = None,
     ) -> 'State | None':
-        """Async entry point wrapping the legacy AgentController flow.
+        """CANONICAL async entry point — drives execution through TaskEngine phases.
 
-        This is the CANONICAL async entry point that replaces the direct
-        call to core.main.run_controller(). It:
-        1. Runs pre-execution tracking (INTAKE via TaskEngine)
-        2. Delegates to AgentController for the actual LLM agent loop (EXECUTE)
-        3. Records completion in TaskEngine for observability
-        4. Fires plugin hooks at phase boundaries
+        This is the single authoritative execution flow. ALL entry points
+        (CLI, server, programmatic) route through here.
+
+        Architecture (Fix #1, #2, #3):
+          1. PRE-PHASES: INTAKE -> CONTEXT_BUILD -> REPO_ANALYSIS -> PLAN
+             Driven by TaskEngine through TaskRunner. These run BEFORE
+             AgentController touches anything.
+          2. EXECUTE PHASE: Delegates to AgentController for the LLM agent loop.
+             AgentController is ONLY the execution adapter — it receives the
+             parent EOS instance and does not create its own.
+          3. POST-PHASES: TEST -> REVIEW -> ARTIFACT_GENERATION -> COMPLETE
+             Driven by TaskEngine after AgentController finishes.
+
+        Fix #6: Plugin hooks fire at every phase boundary (pre_task, pre_phase,
+                post_phase, post_task) through the HookRunner.
+        Fix #7: REPO_ANALYSIS is a mandatory gate — if repo_path is set and
+                analysis fails, PLAN is blocked.
+        Fix #8: Memory populates CONTEXT_BUILD, policy drives EXECUTE decisions.
 
         The AgentController receives THIS EngineeringOS instance (not a new one)
         to avoid circular creation and ensure a single subsystem spine.
@@ -199,32 +211,134 @@ class EngineeringOS:
         from openhands.core.main import run_controller
 
         logger.info(
-            '[EngineeringOS] run_controller_async: routing through canonical path'
+            '[EngineeringOS] run_controller_async: canonical TaskEngine path'
         )
 
-        # Fire pre-task plugin hooks
+        # ── Fire pre-task plugin hooks (Fix #6: lifecycle ownership) ───────
         if self._hook_runner:
             self._hook_runner.fire('pre_task', description='async_controller')
 
-        # Submit a tracking task to the engine for observability
+        # ── Submit task to TaskEngine for phase tracking ──────────────────
         task_desc = ''
         if hasattr(initial_user_action, 'content'):
             task_desc = str(initial_user_action.content)[:500]
 
+        # Determine repo path from config for mandatory gate enforcement
+        repo_path = ''
+        if hasattr(config, 'sandbox') and hasattr(config.sandbox, 'selected_repo'):
+            repo_path = config.sandbox.selected_repo or ''
+
         task_id = self._engine.submit(
             title=task_desc[:100] or 'Agent task',
             description=task_desc,
+            repo_path=repo_path,
         )
 
-        # Record metadata for the tracking task
         task = self._engine.get_task(task_id)
+        sm = self._engine.get_state_machine(task_id)
         if task:
             task.metadata['controller_mode'] = True
             task.metadata['sid'] = sid or ''
+            task.metadata['canonical_path'] = True  # Mark as canonical
 
-        # Delegate to the existing run_controller with THIS eos instance.
-        # Wrap in try/finally to guarantee symmetric pre_task/post_task hooks
-        # and task-result recording even when run_controller raises.
+        # ══════════════════════════════════════════════════════════════════
+        # PRE-PHASES: INTAKE -> CONTEXT_BUILD -> REPO_ANALYSIS -> PLAN
+        # These run through TaskEngine BEFORE AgentController is invoked.
+        # Fix #1: TaskEngine drives phases, not just observability tracking.
+        # Fix #7: REPO_ANALYSIS is a mandatory gate before PLAN.
+        # Fix #8: Memory populates CONTEXT_BUILD context.
+        # ══════════════════════════════════════════════════════════════════
+        pre_phases_ok = True
+        if task and sm:
+            pre_phases = [
+                TaskPhase.INTAKE,
+                TaskPhase.CONTEXT_BUILD,
+                TaskPhase.REPO_ANALYSIS,
+                TaskPhase.PLAN,
+            ]
+            repo_analysis_passed = False
+
+            for phase in pre_phases:
+                # Fire pre_phase hook (Fix #6)
+                if self._hook_runner:
+                    self._hook_runner.fire(
+                        'pre_phase', phase=phase.value, task_id=task_id
+                    )
+
+                # Fix #7: REPO_ANALYSIS mandatory gate
+                if (
+                    phase == TaskPhase.PLAN
+                    and not repo_analysis_passed
+                    and repo_path
+                ):
+                    logger.error(
+                        f'[EngineeringOS] PLAN blocked: REPO_ANALYSIS gate '
+                        f'not passed for task {task_id}'
+                    )
+                    task.result.error = (
+                        'PLAN blocked: REPO_ANALYSIS must pass first '
+                        '(Fix #7: mandatory gate)'
+                    )
+                    pre_phases_ok = False
+                    break
+
+                # Execute phase through TaskRunner
+                result = self._engine.runner.run_phase(phase, task)
+                task.result.set_phase_result(
+                    phase.value,
+                    result.success,
+                    result.error or str(result.output)[:500],
+                )
+
+                # Track REPO_ANALYSIS gate
+                if phase == TaskPhase.REPO_ANALYSIS and result.success:
+                    repo_analysis_passed = True
+
+                # Fire post_phase hook (Fix #6)
+                if self._hook_runner:
+                    self._hook_runner.fire(
+                        'post_phase',
+                        phase=phase.value,
+                        task_id=task_id,
+                        success=result.success,
+                    )
+
+                # Transition state machine
+                if not sm.is_terminal:
+                    next_idx = pre_phases.index(phase) + 1
+                    if next_idx < len(pre_phases):
+                        try:
+                            sm.transition_to(
+                                pre_phases[next_idx], success=result.success
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                f'[EngineeringOS] SM transition warning: {exc}'
+                            )
+
+                if not result.success:
+                    logger.warning(
+                        f'[EngineeringOS] Pre-phase {phase.value} failed: '
+                        f'{result.error}'
+                    )
+                    # Non-critical pre-phases: log but continue
+                    # Only REPO_ANALYSIS gate blocks (handled above)
+
+            logger.info(
+                f'[EngineeringOS] Pre-phases complete for {task_id}, '
+                f'proceeding to EXECUTE'
+            )
+
+        # ══════════════════════════════════════════════════════════════════
+        # EXECUTE PHASE: Delegate to AgentController (Fix #2: adapter only)
+        # AgentController receives THIS EOS instance — single spine.
+        # Fix #8: RetryPolicy consulted for retry decisions.
+        # ══════════════════════════════════════════════════════════════════
+        if self._hook_runner:
+            self._hook_runner.fire(
+                'pre_phase', phase='execute', task_id=task_id
+            )
+
         state: State | None = None
         try:
             state = await run_controller(
@@ -236,16 +350,72 @@ class EngineeringOS:
                 headless_mode=headless_mode,
                 memory=memory,
                 conversation_instructions=conversation_instructions,
-                eos=self,  # Pass THIS instance to avoid circular creation
+                eos=self,  # Pass THIS instance — single spine (Fix #2)
             )
         except Exception:
-            # Record failure in tracking task on exception
             if task:
                 task.result.success = False
-                task.result.error = 'run_controller raised an exception'
+                task.result.error = 'AgentController raised an exception'
             raise
         finally:
-            # Record completion in engine for observability
+            # Record EXECUTE phase result
+            execute_success = False
+            if state and hasattr(state, 'agent_state'):
+                from openhands.core.schema import AgentState
+                execute_success = state.agent_state == AgentState.FINISHED
+
+            if task:
+                task.result.set_phase_result(
+                    'execute',
+                    execute_success,
+                    f'Agent state: {state.agent_state if state and hasattr(state, "agent_state") else "unknown"}',
+                )
+
+            if self._hook_runner:
+                self._hook_runner.fire(
+                    'post_phase',
+                    phase='execute',
+                    task_id=task_id,
+                    success=execute_success,
+                )
+
+            # ══════════════════════════════════════════════════════════════
+            # POST-PHASES: TEST -> REVIEW -> ARTIFACT_GENERATION -> COMPLETE
+            # Run through TaskEngine AFTER AgentController finishes.
+            # Fix #1: TaskEngine owns the full lifecycle.
+            # ══════════════════════════════════════════════════════════════
+            if task and sm and not sm.is_terminal:
+                post_phases = [
+                    TaskPhase.TEST,
+                    TaskPhase.REVIEW,
+                    TaskPhase.ARTIFACT_GENERATION,
+                ]
+                for phase in post_phases:
+                    if self._hook_runner:
+                        self._hook_runner.fire(
+                            'pre_phase', phase=phase.value, task_id=task_id
+                        )
+
+                    post_result = self._engine.runner.run_phase(phase, task)
+                    task.result.set_phase_result(
+                        phase.value,
+                        post_result.success,
+                        post_result.error or str(post_result.output)[:500],
+                    )
+
+                    # Collect artifacts
+                    for artifact in post_result.artifacts:
+                        task.result.add_artifact(artifact)
+
+                    if self._hook_runner:
+                        self._hook_runner.fire(
+                            'post_phase',
+                            phase=phase.value,
+                            task_id=task_id,
+                            success=post_result.success,
+                        )
+
+            # Record final task result
             if task and not task.result.error:
                 if state and hasattr(state, 'agent_state'):
                     from openhands.core.schema import AgentState
@@ -255,7 +425,7 @@ class EngineeringOS:
                     task.result.success = False
                     task.result.error = 'No state returned from controller'
 
-            # Fire post-task plugin hooks (guaranteed symmetric with pre_task)
+            # ── Fire post-task hook (Fix #6: symmetric lifecycle) ──────────
             if self._hook_runner:
                 self._hook_runner.fire(
                     'post_task',
