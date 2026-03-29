@@ -12,7 +12,7 @@ import asyncio
 import copy
 import os
 import time
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from openhands.security.analyzer import SecurityAnalyzer
@@ -933,8 +933,10 @@ class AgentController:
             f'start delegate, creating agent {delegate_agent.name}',
         )
 
-        # Create the delegate with is_delegate=True so it does NOT subscribe directly
-        self.delegate = AgentController(
+        # Create the delegate with is_delegate=True so it does NOT subscribe directly.
+        # Pass the parent's EngineeringOS instance to avoid creating redundant ones
+        # (Fix: Devin Review bug #2 — delegate must share parent's EOS spine).
+        delegate_kwargs: dict[str, Any] = dict(
             sid=self.id + '-delegate',
             file_store=self.file_store,
             user_id=self.user_id,
@@ -950,6 +952,9 @@ class AgentController:
             headless_mode=self.headless_mode,
             security_analyzer=self.security_analyzer,
         )
+        if self._eos_available:
+            delegate_kwargs['eos'] = self._eos
+        self.delegate = AgentController(**delegate_kwargs)
 
         # ── Engineering OS: track delegate start via metrics ──────────────
         # DEPRECATED_V0: Was self._hook_runner.fire('on_delegate_started', ...)

@@ -1,11 +1,11 @@
 """Server entrypoint — routes through canonical V1 app_server when available.
 
 The OPENHANDS_SERVER_VERSION env var controls which server is started:
-  - "v1" (default): openhands.app_server (V1 canonical path)
-  - "v0": openhands.server.listen:app (legacy, deprecated April 1, 2026)
+  - "v0" (default): openhands.server.listen:app (legacy, deprecated April 1, 2026)
+  - "v1": openhands.app_server (V1 canonical path — requires app_server:app to exist)
 
-All new deployments should use V1. The V0 path is preserved only for
-backward compatibility during the migration window.
+All new deployments should use V1 once it is fully available. The V0 path is preserved
+only for backward compatibility during the migration window.
 """
 
 import os
