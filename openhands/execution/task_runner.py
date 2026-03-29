@@ -388,7 +388,7 @@ class TaskRunner:
                 ]
                 context_data['error_memory_count'] = len(recent_errors)
             except Exception as exc:
-                logger.debug(f'[TaskRunner] ErrorMemory find_similar: {exc}')
+                logger.debug(f'[TaskRunner] ErrorMemory get_recurring_errors: {exc}')
 
         # Query FixMemory for past successful fixes
         if self._fix_memory:
@@ -1068,7 +1068,18 @@ class TaskRunner:
         policy_decision = 'retry'  # default if no policy
         policy_reason = 'no policy configured'
 
-        if self._retry_policy:
+        # Read the decision from FAILURE_ANALYSIS context (already called
+        # should_retry there — calling again would double-record in history).
+        fa = getattr(task.context, 'failure_analysis', None)
+        if fa and hasattr(fa, 'retry_recommended'):
+            if fa.retry_recommended:
+                policy_decision = getattr(fa, 'retry_strategy', 'retry')
+                policy_reason = 'from failure_analysis context'
+            else:
+                policy_decision = 'escalate'
+                policy_reason = 'failure_analysis recommends no retry'
+        elif self._retry_policy:
+            # Fallback: FAILURE_ANALYSIS didn't run or had no decision
             try:
                 decision = self._retry_policy.should_retry(
                     task_id=task.task_id,
