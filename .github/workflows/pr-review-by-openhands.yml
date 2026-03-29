@@ -37,7 +37,25 @@ jobs:
             cancel-in-progress: true
         runs-on: ubuntu-24.04
         steps:
+            - name: Check required secrets
+              id: check-secrets
+              run: |
+                  missing=""
+                  if [ -z "${{ secrets.LLM_API_KEY }}" ]; then
+                    missing="${missing} LLM_API_KEY"
+                  fi
+                  if [ -z "${{ secrets.ALLHANDS_BOT_GITHUB_PAT }}" ]; then
+                    missing="${missing} ALLHANDS_BOT_GITHUB_PAT"
+                  fi
+                  if [ -n "$missing" ]; then
+                    echo "::error::PR Review requires the following repository secrets to be configured:${missing}. Go to Settings > Secrets and variables > Actions to add them."
+                    echo "secrets-ok=false" >> "$GITHUB_OUTPUT"
+                    exit 1
+                  fi
+                  echo "secrets-ok=true" >> "$GITHUB_OUTPUT"
+
             - name: Run PR Review
+              if: steps.check-secrets.outputs.secrets-ok == 'true'
               uses: OpenHands/extensions/plugins/pr-review@main
               with:
                   llm-model: litellm_proxy/claude-sonnet-4-5-20250929
@@ -46,3 +64,14 @@ jobs:
                   llm-api-key: ${{ secrets.LLM_API_KEY }}
                   github-token: ${{ secrets.ALLHANDS_BOT_GITHUB_PAT }}
                   lmnr-api-key: ${{ secrets.LMNR_SKILLS_API_KEY }}
+
+            - name: Upload review logs
+              if: always() && steps.check-secrets.outputs.secrets-ok == 'true'
+              uses: actions/upload-artifact@v4
+              with:
+                  name: openhands-pr-review-logs
+                  path: |
+                      *.log
+                      output/
+                  retention-days: 7
+                  if-no-files-found: ignore
