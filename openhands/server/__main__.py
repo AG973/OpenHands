@@ -1,11 +1,11 @@
-"""Server entrypoint — canonical path with V0 as explicit opt-in fallback.
+"""Server entrypoint — routes through canonical V1 app_server when available.
 
 The OPENHANDS_SERVER_VERSION env var controls which server is started:
-  - "v1" (default): openhands.app_server (canonical path through EngineeringOS/TaskEngine)
-  - "v0": openhands.server.listen:app (legacy, deprecated April 1, 2026 — explicit opt-in only)
+  - "v0" (default): openhands.server.listen:app (stable, production-ready)
+  - "v1": openhands.app_server (canonical path through EngineeringOS/TaskEngine)
 
-Fix #4 (ChatGPT review): Choose one server deployment target. V1 is now the default.
-V0 requires explicit OPENHANDS_SERVER_VERSION=v0 to activate.
+Fix #4 (ChatGPT review): V1 path exists and is selectable. Default remains V0
+until openhands.app_server exports a working `app` object.
 """
 
 import os
@@ -17,34 +17,33 @@ from openhands.core.logger import openhands_logger as logger
 
 
 def main():
-    # Fix #4: Default to V1 canonical path. V0 is explicit opt-in only.
-    server_version = os.getenv('OPENHANDS_SERVER_VERSION', 'v1').lower()
+    # Fix #4: V1 path exists; default stays V0 until app_server:app is ready.
+    server_version = os.getenv('OPENHANDS_SERVER_VERSION', 'v0').lower()
     log_config = None
     if os.getenv('LOG_JSON', '0') in ('1', 'true', 'True'):
         log_config = get_uvicorn_json_log_config()
 
-    if server_version == 'v0':
-        # Explicit V0 legacy opt-in
-        app_module = 'openhands.server.listen:app'
-        logger.info(
-            '[Server] Starting legacy V0 server (explicit opt-in via '
-            'OPENHANDS_SERVER_VERSION=v0, deprecated April 1, 2026)'
-        )
-    else:
-        # V1 canonical path (default)
+    if server_version == 'v1':
+        # V1 canonical path (opt-in until app_server:app is implemented)
         try:
             import importlib
             mod = importlib.import_module('openhands.app_server')
             if not hasattr(mod, 'app'):
                 raise AttributeError("openhands.app_server has no 'app' attribute")
             app_module = 'openhands.app_server:app'
-            logger.info('[Server] Starting V1 canonical app_server (default)')
+            logger.info('[Server] Starting V1 canonical app_server')
         except (ImportError, AttributeError) as exc:
             logger.warning(
                 f'[Server] V1 app_server not available ({exc}), '
                 f'falling back to V0 server'
             )
             app_module = 'openhands.server.listen:app'
+    else:
+        app_module = 'openhands.server.listen:app'
+        logger.info(
+            '[Server] Starting V0 server '
+            '(set OPENHANDS_SERVER_VERSION=v1 for canonical path)'
+        )
 
     uvicorn.run(
         app_module,

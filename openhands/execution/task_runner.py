@@ -1073,6 +1073,9 @@ class TaskRunner:
                 decision = self._retry_policy.should_retry(
                     task_id=task.task_id,
                     error=task.result.error or '',
+                    error_type=task.result.error_category
+                    if hasattr(task.result, 'error_category')
+                    else '',
                     attempt=retry_count,
                 )
                 # RetryPolicy returns a RetryDecision dataclass

@@ -377,7 +377,7 @@ class EngineeringOS:
                     # Fix #1: TaskEngine owns the full lifecycle.
                     # Hooks fired inside TaskRunner.run_phase().
                     # ══════════════════════════════════════════════════════
-                    if task and sm and not sm.is_terminal:
+                    if task and sm and not sm.is_terminal and execute_success:
                         post_phases = [
                             TaskPhase.TEST,
                             TaskPhase.REVIEW,
