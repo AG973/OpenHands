@@ -49,6 +49,147 @@ class ArtifactType(Enum):
     ANALYSIS_REPORT = 'analysis_report'
     EXECUTION_TRACE = 'execution_trace'
     ERROR_REPORT = 'error_report'
+    EXECUTION_LOG = 'execution_log'
+    SUMMARY = 'summary'
+
+
+class StepStatus(Enum):
+    """Status of a single plan step during execution."""
+
+    PENDING = 'pending'
+    RUNNING = 'running'
+    COMPLETED = 'completed'
+    FAILED = 'failed'
+    SKIPPED = 'skipped'
+
+
+@dataclass
+class PlanStep:
+    """A single step in the execution plan.
+
+    Generated during the PLAN phase and executed one-by-one during EXECUTE.
+    Each step tracks its own status, output, tool usage, and timing.
+    """
+
+    step_id: int = 0
+    action: str = ''  # 'file_edit', 'shell_command', 'install_dep', 'create_file', 'analyze'
+    description: str = ''
+    target_files: list[str] = field(default_factory=list)
+    commands: list[str] = field(default_factory=list)
+    dependencies: list[str] = field(default_factory=list)  # other step_ids this depends on
+    tools_allowed: list[str] = field(default_factory=list)
+    tools_used: list[str] = field(default_factory=list)
+    status: StepStatus = StepStatus.PENDING
+    output: dict[str, Any] = field(default_factory=dict)
+    error: str = ''
+    started_at: float = 0.0
+    completed_at: float = 0.0
+    decision_reasoning: str = ''  # why this step was chosen
+
+    @property
+    def duration_s(self) -> float:
+        if self.started_at == 0.0:
+            return 0.0
+        end = self.completed_at if self.completed_at > 0 else time.time()
+        return end - self.started_at
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            'step_id': self.step_id,
+            'action': self.action,
+            'description': self.description[:200],
+            'target_files': self.target_files,
+            'commands': self.commands,
+            'tools_used': self.tools_used,
+            'status': self.status.value,
+            'error': self.error[:200] if self.error else '',
+            'duration_s': self.duration_s,
+        }
+
+
+class ErrorCategory(Enum):
+    """Structured error classification for failure analysis."""
+
+    SYNTAX_ERROR = 'syntax_error'
+    RUNTIME_ERROR = 'runtime_error'
+    IMPORT_ERROR = 'import_error'
+    TYPE_ERROR = 'type_error'
+    DEPENDENCY_ERROR = 'dependency_error'
+    TEST_FAILURE = 'test_failure'
+    PERMISSION_ERROR = 'permission_error'
+    TIMEOUT = 'timeout'
+    CONFIGURATION_ERROR = 'configuration_error'
+    NETWORK_ERROR = 'network_error'
+    UNKNOWN = 'unknown'
+
+
+@dataclass
+class FailureAnalysisResult:
+    """Structured result from failure analysis phase."""
+
+    category: ErrorCategory = ErrorCategory.UNKNOWN
+    root_cause: str = ''
+    original_error: str = ''
+    stack_trace: str = ''
+    affected_files: list[str] = field(default_factory=list)
+    similar_past_errors: list[dict[str, Any]] = field(default_factory=list)
+    suggested_fixes: list[dict[str, Any]] = field(default_factory=list)
+    retry_recommended: bool = False
+    retry_strategy: str = ''  # 'same_approach', 'different_approach', 'simplified', 'escalate'
+    confidence: float = 0.0  # 0.0-1.0 how confident is the classification
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            'category': self.category.value,
+            'root_cause': self.root_cause,
+            'original_error': self.original_error[:500],
+            'affected_files': self.affected_files,
+            'similar_past_errors_count': len(self.similar_past_errors),
+            'suggested_fixes_count': len(self.suggested_fixes),
+            'retry_recommended': self.retry_recommended,
+            'retry_strategy': self.retry_strategy,
+            'confidence': self.confidence,
+        }
+
+
+@dataclass
+class TestResult:
+    """Structured test execution result."""
+
+    total: int = 0
+    passed: int = 0
+    failed: int = 0
+    skipped: int = 0
+    errors: int = 0
+    duration_s: float = 0.0
+    test_output: str = ''
+    failures: list[dict[str, Any]] = field(default_factory=list)  # [{test_name, error, file, line}]
+    error_types: dict[str, int] = field(default_factory=dict)  # {error_type: count}
+    coverage_percent: float = 0.0
+
+    @property
+    def success(self) -> bool:
+        return self.failed == 0 and self.errors == 0
+
+    @property
+    def pass_rate(self) -> float:
+        if self.total == 0:
+            return 0.0
+        return self.passed / self.total
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            'total': self.total,
+            'passed': self.passed,
+            'failed': self.failed,
+            'skipped': self.skipped,
+            'errors': self.errors,
+            'duration_s': self.duration_s,
+            'pass_rate': self.pass_rate,
+            'failures': self.failures[:10],
+            'error_types': self.error_types,
+            'coverage_percent': self.coverage_percent,
+        }
 
 
 @dataclass
@@ -110,6 +251,17 @@ class TaskContext:
 
     # Plan (populated during PLAN phase)
     plan_steps: list[dict[str, Any]] = field(default_factory=list)
+    structured_plan: list['PlanStep'] = field(default_factory=list)
+
+    # Execution tracking (populated during EXECUTE phase)
+    step_results: list[dict[str, Any]] = field(default_factory=list)
+    current_step_index: int = 0
+
+    # Failure analysis (populated during FAILURE_ANALYSIS)
+    failure_analysis: 'FailureAnalysisResult | None' = None
+
+    # Test results (populated during TEST phase)
+    test_result: 'TestResult | None' = None
 
     # Environment info
     runtime_id: str = ''
@@ -131,7 +283,9 @@ class TaskContext:
             'dependency_count': len(self.dependency_graph),
             'test_count': len(self.test_map),
             'impact_files': self.impact_files[:10],
-            'plan_step_count': len(self.plan_steps),
+            'plan_step_count': len(self.structured_plan),
+            'step_results': self.step_results,
+            'current_step_index': self.current_step_index,
             'available_tools': self.available_tools,
             'model_name': self.model_name,
             'provider': self.provider,

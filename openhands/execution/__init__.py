@@ -13,11 +13,17 @@ Modules:
 
 from openhands.execution.task_engine import TaskEngine
 from openhands.execution.task_models import (
+    ArtifactType,
+    ErrorCategory,
+    FailureAnalysisResult,
+    PlanStep,
+    StepStatus,
     Task,
     TaskArtifact,
     TaskContext,
     TaskPriority,
     TaskResult,
+    TestResult,
     TaskType,
 )
 from openhands.execution.task_runner import PhaseResult, TaskRunner
@@ -39,5 +45,11 @@ __all__ = [
     'TaskArtifact',
     'TaskType',
     'TaskPriority',
+    'ArtifactType',
+    'ErrorCategory',
+    'FailureAnalysisResult',
+    'PlanStep',
+    'StepStatus',
+    'TestResult',
     'PhaseResult',
 ]
