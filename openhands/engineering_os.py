@@ -222,36 +222,46 @@ class EngineeringOS:
             task.metadata['controller_mode'] = True
             task.metadata['sid'] = sid or ''
 
-        # Delegate to the existing run_controller with THIS eos instance
-        state = await run_controller(
-            config=config,
-            initial_user_action=initial_user_action,
-            sid=sid,
-            exit_on_message=exit_on_message,
-            fake_user_response_fn=fake_user_response_fn,
-            headless_mode=headless_mode,
-            memory=memory,
-            conversation_instructions=conversation_instructions,
-            eos=self,  # Pass THIS instance to avoid circular creation
-        )
-
-        # Record completion in engine for observability
-        if task:
-            if state and hasattr(state, 'agent_state'):
-                from openhands.core.schema import AgentState
-                task.result.success = state.agent_state == AgentState.FINISHED
-                task.result.message = f'Agent finished in state: {state.agent_state}'
-            else:
-                task.result.success = False
-                task.result.error = 'No state returned from controller'
-
-        # Fire post-task plugin hooks
-        if self._hook_runner:
-            self._hook_runner.fire(
-                'post_task',
-                task_id=task_id,
-                success=task.result.success if task else False,
+        # Delegate to the existing run_controller with THIS eos instance.
+        # Wrap in try/finally to guarantee symmetric pre_task/post_task hooks
+        # and task-result recording even when run_controller raises.
+        state: State | None = None
+        try:
+            state = await run_controller(
+                config=config,
+                initial_user_action=initial_user_action,
+                sid=sid,
+                exit_on_message=exit_on_message,
+                fake_user_response_fn=fake_user_response_fn,
+                headless_mode=headless_mode,
+                memory=memory,
+                conversation_instructions=conversation_instructions,
+                eos=self,  # Pass THIS instance to avoid circular creation
             )
+        except Exception:
+            # Record failure in tracking task on exception
+            if task:
+                task.result.success = False
+                task.result.error = 'run_controller raised an exception'
+            raise
+        finally:
+            # Record completion in engine for observability
+            if task and not task.result.error:
+                if state and hasattr(state, 'agent_state'):
+                    from openhands.core.schema import AgentState
+                    task.result.success = state.agent_state == AgentState.FINISHED
+                    task.result.message = f'Agent finished in state: {state.agent_state}'
+                else:
+                    task.result.success = False
+                    task.result.error = 'No state returned from controller'
+
+            # Fire post-task plugin hooks (guaranteed symmetric with pre_task)
+            if self._hook_runner:
+                self._hook_runner.fire(
+                    'post_task',
+                    task_id=task_id,
+                    success=task.result.success if task else False,
+                )
 
         return state
 

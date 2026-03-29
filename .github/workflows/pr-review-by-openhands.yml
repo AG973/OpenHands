@@ -39,12 +39,15 @@ jobs:
         steps:
             - name: Check required secrets
               id: check-secrets
+              env:
+                  LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+                  ALLHANDS_BOT_GITHUB_PAT: ${{ secrets.ALLHANDS_BOT_GITHUB_PAT }}
               run: |
                   missing=""
-                  if [ -z "${{ secrets.LLM_API_KEY }}" ]; then
+                  if [ -z "$LLM_API_KEY" ]; then
                     missing="${missing} LLM_API_KEY"
                   fi
-                  if [ -z "${{ secrets.ALLHANDS_BOT_GITHUB_PAT }}" ]; then
+                  if [ -z "$ALLHANDS_BOT_GITHUB_PAT" ]; then
                     missing="${missing} ALLHANDS_BOT_GITHUB_PAT"
                   fi
                   if [ -n "$missing" ]; then
