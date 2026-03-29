@@ -44,6 +44,18 @@ class PluginHook(Enum):
     ON_USER_MESSAGE = 'on_user_message'
     ON_AGENT_MESSAGE = 'on_agent_message'
 
+    # Task lifecycle (fired by EngineeringOS)
+    PRE_TASK = 'pre_task'
+    POST_TASK = 'post_task'
+
+    # Phase lifecycle (fired by TaskRunner)
+    PRE_PHASE = 'pre_phase'
+    POST_PHASE = 'post_phase'
+
+    # Orchestration lifecycle (fired by EngineeringOS.run_orchestrated)
+    PRE_ORCHESTRATION = 'pre_orchestration'
+    POST_ORCHESTRATION = 'post_orchestration'
+
 
 class OpenHandsPlugin(ABC):
     """Base class for OpenHands plugins.
@@ -225,5 +237,53 @@ class OpenHandsPlugin(ABC):
         """Called when the agent sends a message.
 
         kwargs: message, action_type
+        """
+        return None
+
+    # ── Task lifecycle hooks (EngineeringOS) ───────────────────────────
+
+    def pre_task(self, **kwargs: Any) -> dict[str, Any] | None:
+        """Called before a task begins execution.
+
+        kwargs: description
+        """
+        return None
+
+    def post_task(self, **kwargs: Any) -> dict[str, Any] | None:
+        """Called after a task completes.
+
+        kwargs: task_id, success
+        """
+        return None
+
+    # ── Phase lifecycle hooks (TaskRunner) ─────────────────────────────
+
+    def pre_phase(self, **kwargs: Any) -> dict[str, Any] | None:
+        """Called before a phase begins execution.
+
+        kwargs: phase, task_id
+        """
+        return None
+
+    def post_phase(self, **kwargs: Any) -> dict[str, Any] | None:
+        """Called after a phase completes.
+
+        kwargs: phase, task_id, success
+        """
+        return None
+
+    # ── Orchestration lifecycle hooks (EngineeringOS) ──────────────────
+
+    def pre_orchestration(self, **kwargs: Any) -> dict[str, Any] | None:
+        """Called before orchestrated multi-agent execution begins.
+
+        kwargs: task_title
+        """
+        return None
+
+    def post_orchestration(self, **kwargs: Any) -> dict[str, Any] | None:
+        """Called after orchestrated multi-agent execution completes.
+
+        kwargs: task_title, success
         """
         return None
