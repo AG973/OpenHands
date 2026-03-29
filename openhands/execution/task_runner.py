@@ -379,8 +379,10 @@ class TaskRunner:
         # Query ErrorMemory for past errors on this repo/task
         if self._error_memory:
             try:
-                recent_errors = self._error_memory.query(
-                    task_id=task.task_id,
+                recent_errors = self._error_memory.find_similar(
+                    error_type='',
+                    error_message='',
+                    file_path='',
                     limit=10,
                 )
                 task.context.error_memory = [
@@ -389,37 +391,33 @@ class TaskRunner:
                 ]
                 context_data['error_memory_count'] = len(recent_errors)
             except Exception as exc:
-                logger.debug(f'[TaskRunner] ErrorMemory query: {exc}')
+                logger.debug(f'[TaskRunner] ErrorMemory find_similar: {exc}')
 
         # Query FixMemory for past successful fixes
         if self._fix_memory:
             try:
-                past_fixes = self._fix_memory.query(
-                    task_id=task.task_id,
-                    limit=10,
-                )
+                past_fixes = self._fix_memory.get_all_fixes()[:10]
                 task.context.fix_memory = [
                     f.to_dict() if hasattr(f, 'to_dict') else str(f)
                     for f in past_fixes
                 ]
                 context_data['fix_memory_count'] = len(past_fixes)
             except Exception as exc:
-                logger.debug(f'[TaskRunner] FixMemory query: {exc}')
+                logger.debug(f'[TaskRunner] FixMemory get_all_fixes: {exc}')
 
         # Query DecisionMemory for past decisions
         if self._decision_memory:
             try:
-                past_decisions = self._decision_memory.query(
+                past_decisions = self._decision_memory.get_task_decisions(
                     task_id=task.task_id,
-                    limit=10,
-                )
+                )[:10]
                 task.context.decision_memory = [
                     d.to_dict() if hasattr(d, 'to_dict') else str(d)
                     for d in past_decisions
                 ]
                 context_data['decision_memory_count'] = len(past_decisions)
             except Exception as exc:
-                logger.debug(f'[TaskRunner] DecisionMemory query: {exc}')
+                logger.debug(f'[TaskRunner] DecisionMemory get_task_decisions: {exc}')
 
         logger.info(
             f'[TaskRunner] CONTEXT_BUILD: populated from memory subsystems '
@@ -1077,20 +1075,16 @@ class TaskRunner:
             try:
                 decision = self._retry_policy.should_retry(
                     task_id=task.task_id,
-                    retry_count=retry_count,
-                    max_retries=max_retries,
-                    last_error=task.result.error or '',
+                    error=task.result.error or '',
+                    attempt=retry_count,
                 )
-                # RetryPolicy returns a dict with 'action' and 'reason'
-                if isinstance(decision, dict):
-                    policy_decision = decision.get('action', 'retry')
-                    policy_reason = decision.get('reason', '')
-                elif isinstance(decision, bool):
-                    policy_decision = 'retry' if decision else 'escalate'
-                    policy_reason = 'policy boolean result'
+                # RetryPolicy returns a RetryDecision dataclass
+                if decision.should_retry:
+                    policy_decision = decision.strategy.value
+                    policy_reason = decision.reason
                 else:
-                    policy_decision = str(decision)
-                    policy_reason = 'raw policy output'
+                    policy_decision = 'escalate'
+                    policy_reason = decision.reason
             except Exception as exc:
                 logger.warning(f'[TaskRunner] RetryPolicy failed: {exc}')
                 policy_decision = 'retry'
@@ -1126,12 +1120,16 @@ class TaskRunner:
                 # Record in FixMemory for future reference (Fix #8)
                 if self._fix_memory:
                     try:
-                        self._fix_memory.record(
-                            task_id=task.task_id,
-                            strategy=strategy,
-                            success=fix_result.get('success', True),
-                            error=task.result.error or '',
-                        )
+                        from openhands.memory.fix_memory import FixEntry
+                        fix_success = fix_result.get('success', True)
+                        self._fix_memory.record_fix(FixEntry(
+                            error_type=task.result.error_category
+                            if hasattr(task.result, 'error_category')
+                            else '',
+                            fix_description=strategy,
+                            success_count=1 if fix_success else 0,
+                            failure_count=0 if fix_success else 1,
+                        ))
                     except Exception:
                         pass
 
