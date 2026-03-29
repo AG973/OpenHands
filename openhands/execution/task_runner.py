@@ -103,6 +103,9 @@ class TaskRunner:
             TaskPhase.ARTIFACT_GENERATION: self._handle_artifact_generation,
         }
 
+        # Plugin lifecycle (injected by EngineeringOS)
+        self._hook_runner: Any = None
+
         # External integration callables (set by EngineeringOS or caller)
         self._context_builder: Callable[[Task], dict[str, Any]] | None = None
         self._repo_analyzer: Callable[[Task], dict[str, Any]] | None = None
@@ -166,6 +169,12 @@ class TaskRunner:
     ) -> None:
         self._artifact_generator = fn
 
+    # ── Plugin lifecycle setter ──────────────────────────────────────────
+
+    def set_hook_runner(self, runner: Any) -> None:
+        """Inject HookRunner for plugin lifecycle at phase boundaries."""
+        self._hook_runner = runner
+
     # ── Memory / Policy / Observability setters ───────────────────────────
 
     def set_error_memory(self, mem: Any) -> None:
@@ -216,7 +225,19 @@ class TaskRunner:
                 error=f'No handler registered for phase {phase.value}',
             )
 
+        # Fire pre-phase plugin hook
+        if self._hook_runner:
+            try:
+                self._hook_runner.fire(
+                    'pre_phase',
+                    phase=phase.value,
+                    task_id=task.task_id,
+                )
+            except Exception:
+                pass
+
         start = time.time()
+        result: PhaseResult | None = None
         try:
             result = handler(task)
             result.duration_s = time.time() - start
@@ -231,7 +252,7 @@ class TaskRunner:
             logger.error(
                 f'[TaskRunner] Phase {phase.value} failed: {error_msg}'
             )
-            return PhaseResult(
+            result = PhaseResult(
                 phase=phase,
                 success=False,
                 error=error_msg,
@@ -244,6 +265,20 @@ class TaskRunner:
                     )
                 ],
             )
+            return result
+        finally:
+            # Fire post-phase plugin hook in finally to guarantee symmetric
+            # pre_phase/post_phase lifecycle even when the handler raises.
+            if self._hook_runner and result is not None:
+                try:
+                    self._hook_runner.fire(
+                        'post_phase',
+                        phase=phase.value,
+                        task_id=task.task_id,
+                        success=result.success,
+                    )
+                except Exception:
+                    pass
 
     def register_handler(
         self, phase: TaskPhase, handler: Callable[[Task], PhaseResult]

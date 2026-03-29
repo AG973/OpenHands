@@ -1,19 +1,30 @@
-# IMPORTANT: LEGACY V0 CODE - Deprecated since version 1.0.0, scheduled for removal April 1, 2026
-# This file is part of the legacy (V0) implementation of OpenHands and will be removed soon as we complete the migration to V1.
-# OpenHands V1 uses the Software Agent SDK for the agentic core and runs a new application server. Please refer to:
-#   - V1 agentic core (SDK): https://github.com/OpenHands/software-agent-sdk
-#   - V1 application server (in this repo): openhands/app_server/
-# Unless you are working on deprecation, please avoid extending this legacy file and consult the V1 codepaths above.
-# Tag: Legacy-V0
+from __future__ import annotations
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RUNTIME MIGRATION NOTE:
+# This file now routes through EngineeringOS as the CANONICAL entry point.
+# The legacy run_controller() function is preserved for backward compatibility
+# but the __main__ block and CLI entry point use EngineeringOS.run_controller_async().
+#
+# Architecture (post-migration):
+#   CLI / __main__ → EngineeringOS.run_controller_async()
+#     → run_controller() [agent loop backend]
+#       → AgentController [receives parent EOS, no circular creation]
+#
+# Legacy V0 references preserved for deprecation timeline (April 1, 2026).
+# ══════════════════════════════════════════════════════════════════════════════
 import asyncio
 import json
 import os
 import signal
 import sys
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import TYPE_CHECKING, Callable, Protocol
 
 import openhands.agenthub  # noqa F401 (we import this to get the agents registered)
+
+if TYPE_CHECKING:
+    from openhands.engineering_os import EngineeringOS
 from openhands.controller.replay import ReplayManager
 from openhands.controller.state.state import State
 from openhands.core.config import (
@@ -66,8 +77,14 @@ async def run_controller(
     headless_mode: bool = True,
     memory: Memory | None = None,
     conversation_instructions: str | None = None,
+    eos: 'EngineeringOS | None' = None,
 ) -> State | None:
-    """Main coroutine to run the agent controller with task input flexibility.
+    """Agent controller execution backend.
+
+    When called via EngineeringOS.run_controller_async(), the `eos` parameter
+    is set to the parent EngineeringOS instance. The AgentController then
+    receives this EOS instead of creating its own (avoiding circular creation
+    and ensuring a single subsystem spine).
 
     It's only used when you launch openhands backend directly via cmdline.
 
@@ -172,7 +189,8 @@ async def run_controller(
         )
 
     controller, initial_state = create_controller(
-        agent, runtime, config, conversation_stats, replay_events=replay_events
+        agent, runtime, config, conversation_stats, replay_events=replay_events,
+        eos=eos,
     )
 
     assert isinstance(initial_user_action, Action), (
@@ -358,9 +376,15 @@ def load_replay_log(trajectory_path: str) -> tuple[list[Event] | None, Action]:
         raise ValueError(f'Invalid JSON format in {trajectory_path}: {e}')
 
 
-if __name__ == '__main__':
-    args = parse_arguments()
+def cli_entry() -> None:
+    """CLI entry point — routes through EngineeringOS as the canonical path.
 
+    This replaces the legacy __main__ block that called run_controller() directly.
+    Now ALL execution routes through EngineeringOS.run_controller_async().
+    """
+    from openhands.engineering_os import EngineeringOS
+
+    args = parse_arguments()
     config: OpenHandsConfig = setup_config_from_args(args)
 
     # Read task from file, CLI args, or stdin
@@ -375,16 +399,17 @@ if __name__ == '__main__':
     else:
         if not task_str:
             raise ValueError('No task provided. Please specify a task through -t, -f.')
-
-        # Create actual initial user action
         initial_user_action = MessageAction(content=task_str)
 
-    # Set session name
     session_name = args.name
     sid = generate_sid(config, session_name)
 
+    # ── CANONICAL PATH: Route through EngineeringOS ──────────────────────
+    eos = EngineeringOS()
+    logger.info('[cli_entry] Routing through EngineeringOS canonical path')
+
     asyncio.run(
-        run_controller(
+        eos.run_controller_async(
             config=config,
             initial_user_action=initial_user_action,
             sid=sid,
@@ -393,3 +418,7 @@ if __name__ == '__main__':
             else auto_continue_response,
         )
     )
+
+
+if __name__ == '__main__':
+    cli_entry()
