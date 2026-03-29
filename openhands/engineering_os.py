@@ -313,10 +313,16 @@ class EngineeringOS:
                     # Non-critical pre-phases: log but continue
                     # Only REPO_ANALYSIS gate blocks (handled above)
 
-            logger.info(
-                f'[EngineeringOS] Pre-phases complete for {task_id}, '
-                f'proceeding to EXECUTE'
-            )
+            if pre_phases_ok:
+                logger.info(
+                    f'[EngineeringOS] Pre-phases complete for {task_id}, '
+                    f'proceeding to EXECUTE'
+                )
+            else:
+                logger.warning(
+                    f'[EngineeringOS] Pre-phases blocked for {task_id}, '
+                    f'skipping EXECUTE'
+                )
 
         # ══════════════════════════════════════════════════════════════════
         # EXECUTE PHASE: Delegate to AgentController (Fix #2: adapter only)
@@ -325,86 +331,98 @@ class EngineeringOS:
         # Fix #7: Skip EXECUTE if pre-phases failed (mandatory gate).
         # ══════════════════════════════════════════════════════════════════
         state: State | None = None
-        if not pre_phases_ok:
-            logger.warning(
-                f'[EngineeringOS] Skipping EXECUTE: pre-phases failed for {task_id}'
-            )
-            if task:
-                task.result.success = False
-                # task.result.error already set by the gate that failed
-        else:
-            try:
-                state = await run_controller(
-                    config=config,
-                    initial_user_action=initial_user_action,
-                    sid=sid,
-                    exit_on_message=exit_on_message,
-                    fake_user_response_fn=fake_user_response_fn,
-                    headless_mode=headless_mode,
-                    memory=memory,
-                    conversation_instructions=conversation_instructions,
-                    eos=self,  # Pass THIS instance — single spine (Fix #2)
+        try:
+            if not pre_phases_ok:
+                logger.warning(
+                    f'[EngineeringOS] Skipping EXECUTE: pre-phases failed for {task_id}'
                 )
-            except Exception:
                 if task:
                     task.result.success = False
-                    task.result.error = 'AgentController raised an exception'
-                raise
-            finally:
-                # Record EXECUTE phase result
-                execute_success = False
-                if state and hasattr(state, 'agent_state'):
-                    from openhands.core.schema import AgentState
-                    execute_success = state.agent_state == AgentState.FINISHED
-
-                if task:
-                    task.result.set_phase_result(
-                        'execute',
-                        execute_success,
-                        f'Agent state: {state.agent_state if state and hasattr(state, "agent_state") else "unknown"}',
+                    # task.result.error already set by the gate that failed
+            else:
+                try:
+                    state = await run_controller(
+                        config=config,
+                        initial_user_action=initial_user_action,
+                        sid=sid,
+                        exit_on_message=exit_on_message,
+                        fake_user_response_fn=fake_user_response_fn,
+                        headless_mode=headless_mode,
+                        memory=memory,
+                        conversation_instructions=conversation_instructions,
+                        eos=self,  # Pass THIS instance — single spine (Fix #2)
                     )
-
-                # ══════════════════════════════════════════════════════════
-                # POST-PHASES: TEST -> REVIEW -> ARTIFACT_GENERATION
-                # Run through TaskEngine AFTER AgentController finishes.
-                # Fix #1: TaskEngine owns the full lifecycle.
-                # Hooks fired inside TaskRunner.run_phase() — not here.
-                # ══════════════════════════════════════════════════════════
-                if task and sm and not sm.is_terminal:
-                    post_phases = [
-                        TaskPhase.TEST,
-                        TaskPhase.REVIEW,
-                        TaskPhase.ARTIFACT_GENERATION,
-                    ]
-                    for phase in post_phases:
-                        post_result = self._engine.runner.run_phase(phase, task)
-                        task.result.set_phase_result(
-                            phase.value,
-                            post_result.success,
-                            post_result.error or str(post_result.output)[:500],
-                        )
-
-                        # Collect artifacts
-                        for artifact in post_result.artifacts:
-                            task.result.add_artifact(artifact)
-
-                # Record final task result
-                if task and not task.result.error:
+                except Exception:
+                    if task:
+                        task.result.success = False
+                        task.result.error = 'AgentController raised an exception'
+                    raise
+                finally:
+                    # Record EXECUTE phase result
+                    execute_success = False
                     if state and hasattr(state, 'agent_state'):
                         from openhands.core.schema import AgentState
-                        task.result.success = state.agent_state == AgentState.FINISHED
-                        task.result.message = f'Agent finished in state: {state.agent_state}'
-                    else:
-                        task.result.success = False
-                        task.result.error = 'No state returned from controller'
+                        execute_success = state.agent_state == AgentState.FINISHED
 
-                # ── Fire post-task hook (Fix #6: symmetric lifecycle) ────
-                if self._hook_runner:
-                    self._hook_runner.fire(
-                        'post_task',
-                        task_id=task_id,
-                        success=task.result.success if task else False,
-                    )
+                    if task:
+                        task.result.set_phase_result(
+                            'execute',
+                            execute_success,
+                            f'Agent state: {state.agent_state if state and hasattr(state, "agent_state") else "unknown"}',
+                        )
+
+                    # ══════════════════════════════════════════════════════
+                    # POST-PHASES: TEST -> REVIEW -> ARTIFACT_GENERATION
+                    # Run through TaskEngine AFTER AgentController finishes.
+                    # Fix #1: TaskEngine owns the full lifecycle.
+                    # Hooks fired inside TaskRunner.run_phase().
+                    # ══════════════════════════════════════════════════════
+                    if task and sm and not sm.is_terminal:
+                        post_phases = [
+                            TaskPhase.TEST,
+                            TaskPhase.REVIEW,
+                            TaskPhase.ARTIFACT_GENERATION,
+                        ]
+                        for phase in post_phases:
+                            post_result = self._engine.runner.run_phase(
+                                phase, task
+                            )
+                            task.result.set_phase_result(
+                                phase.value,
+                                post_result.success,
+                                post_result.error
+                                or str(post_result.output)[:500],
+                            )
+
+                            # Collect artifacts
+                            for artifact in post_result.artifacts:
+                                task.result.add_artifact(artifact)
+
+                    # Record final task result
+                    if task and not task.result.error:
+                        if state and hasattr(state, 'agent_state'):
+                            from openhands.core.schema import AgentState
+                            task.result.success = (
+                                state.agent_state == AgentState.FINISHED
+                            )
+                            task.result.message = (
+                                f'Agent finished in state: {state.agent_state}'
+                            )
+                        else:
+                            task.result.success = False
+                            task.result.error = (
+                                'No state returned from controller'
+                            )
+        finally:
+            # ── Fire post-task hook (Fix #6: symmetric lifecycle) ──────────
+            # Guaranteed to fire whenever pre_task fired, regardless of
+            # whether pre-phases failed or AgentController raised.
+            if self._hook_runner:
+                self._hook_runner.fire(
+                    'post_task',
+                    task_id=task_id,
+                    success=task.result.success if task else False,
+                )
 
         return state
 
