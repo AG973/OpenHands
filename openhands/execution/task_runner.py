@@ -36,7 +36,6 @@ from openhands.execution.task_models import (
     StepStatus,
     Task,
     TaskArtifact,
-    TaskContext,
     TaskType,
     TestResult,
 )
@@ -132,19 +131,13 @@ class TaskRunner:
 
     # ── Integration setters ──────────────────────────────────────────────
 
-    def set_context_builder(
-        self, fn: Callable[[Task], dict[str, Any]]
-    ) -> None:
+    def set_context_builder(self, fn: Callable[[Task], dict[str, Any]]) -> None:
         self._context_builder = fn
 
-    def set_repo_analyzer(
-        self, fn: Callable[[Task], dict[str, Any]]
-    ) -> None:
+    def set_repo_analyzer(self, fn: Callable[[Task], dict[str, Any]]) -> None:
         self._repo_analyzer = fn
 
-    def set_planner(
-        self, fn: Callable[[Task], list[dict[str, Any]]]
-    ) -> None:
+    def set_planner(self, fn: Callable[[Task], list[dict[str, Any]]]) -> None:
         self._planner = fn
 
     def set_executor(self, fn: Callable[[Task], dict[str, Any]]) -> None:
@@ -153,9 +146,7 @@ class TaskRunner:
     def set_tester(self, fn: Callable[[Task], dict[str, Any]]) -> None:
         self._tester = fn
 
-    def set_failure_analyzer(
-        self, fn: Callable[[Task], dict[str, Any]]
-    ) -> None:
+    def set_failure_analyzer(self, fn: Callable[[Task], dict[str, Any]]) -> None:
         self._failure_analyzer = fn
 
     def set_fixer(self, fn: Callable[[Task], dict[str, Any]]) -> None:
@@ -164,9 +155,7 @@ class TaskRunner:
     def set_reviewer(self, fn: Callable[[Task], dict[str, Any]]) -> None:
         self._reviewer = fn
 
-    def set_artifact_generator(
-        self, fn: Callable[[Task], list[TaskArtifact]]
-    ) -> None:
+    def set_artifact_generator(self, fn: Callable[[Task], list[TaskArtifact]]) -> None:
         self._artifact_generator = fn
 
     # ── Plugin lifecycle setter ──────────────────────────────────────────
@@ -249,9 +238,7 @@ class TaskRunner:
         except Exception as exc:
             duration = time.time() - start
             error_msg = f'{type(exc).__name__}: {exc}'
-            logger.error(
-                f'[TaskRunner] Phase {phase.value} failed: {error_msg}'
-            )
+            logger.error(f'[TaskRunner] Phase {phase.value} failed: {error_msg}')
             result = PhaseResult(
                 phase=phase,
                 success=False,
@@ -312,7 +299,9 @@ class TaskRunner:
             desc_lower = task.description.lower()
             if any(w in desc_lower for w in ['fix', 'bug', 'error', 'crash']):
                 task.task_type = TaskType.BUG_FIX
-            elif any(w in desc_lower for w in ['add', 'feature', 'implement', 'create']):
+            elif any(
+                w in desc_lower for w in ['add', 'feature', 'implement', 'create']
+            ):
                 task.task_type = TaskType.FEATURE
             elif any(w in desc_lower for w in ['refactor', 'clean', 'reorganize']):
                 task.task_type = TaskType.REFACTOR
@@ -368,15 +357,64 @@ class TaskRunner:
                     f'falling back to default'
                 )
 
-        # Default: minimal context from task data
+        # Default: populate context directly from memory subsystems (Fix #8)
+        # Memory drives CONTEXT_BUILD — not just an optional integration.
+        context_data: dict[str, Any] = {
+            'source': 'memory_subsystems',
+            'repo_path': task.context.repo_path,
+            'repo_name': task.context.repo_name,
+        }
+
+        # Query ErrorMemory for past errors on this repo/task
+        if self._error_memory:
+            try:
+                recent_errors = self._error_memory.get_recurring_errors(
+                    min_count=1,
+                )[:10]
+                task.context.error_memory = [
+                    e.to_dict() if hasattr(e, 'to_dict') else str(e)
+                    for e in recent_errors
+                ]
+                context_data['error_memory_count'] = len(recent_errors)
+            except Exception as exc:
+                logger.debug(f'[TaskRunner] ErrorMemory get_recurring_errors: {exc}')
+
+        # Query FixMemory for past successful fixes
+        if self._fix_memory:
+            try:
+                past_fixes = self._fix_memory.get_all_fixes()[:10]
+                task.context.fix_memory = [
+                    f.to_dict() if hasattr(f, 'to_dict') else str(f) for f in past_fixes
+                ]
+                context_data['fix_memory_count'] = len(past_fixes)
+            except Exception as exc:
+                logger.debug(f'[TaskRunner] FixMemory get_all_fixes: {exc}')
+
+        # Query DecisionMemory for past decisions
+        if self._decision_memory:
+            try:
+                past_decisions = self._decision_memory.get_task_decisions(
+                    task_id=task.task_id,
+                )[:10]
+                task.context.decision_memory = [
+                    d.to_dict() if hasattr(d, 'to_dict') else str(d)
+                    for d in past_decisions
+                ]
+                context_data['decision_memory_count'] = len(past_decisions)
+            except Exception as exc:
+                logger.debug(f'[TaskRunner] DecisionMemory get_task_decisions: {exc}')
+
+        logger.info(
+            f'[TaskRunner] CONTEXT_BUILD: populated from memory subsystems '
+            f'(errors={context_data.get("error_memory_count", 0)}, '
+            f'fixes={context_data.get("fix_memory_count", 0)}, '
+            f'decisions={context_data.get("decision_memory_count", 0)})'
+        )
+
         return PhaseResult(
             phase=TaskPhase.CONTEXT_BUILD,
             success=True,
-            output={
-                'source': 'default',
-                'repo_path': task.context.repo_path,
-                'repo_name': task.context.repo_name,
-            },
+            output=context_data,
         )
 
     def _handle_repo_analysis(self, task: Task) -> PhaseResult:
@@ -393,7 +431,9 @@ class TaskRunner:
                 task.context.test_map = repo_data.get('test_map', {})
                 task.context.api_map = repo_data.get('api_map', {})
                 task.context.impact_files = repo_data.get('impact_files', [])
-                task.context.service_boundaries = repo_data.get('service_boundaries', [])
+                task.context.service_boundaries = repo_data.get(
+                    'service_boundaries', []
+                )
                 logger.info(
                     f'[TaskRunner] REPO_ANALYSIS: '
                     f'{len(task.context.file_map)} files, '
@@ -456,17 +496,19 @@ class TaskRunner:
         steps: list[PlanStep] = []
         step_id = 0
         desc = task.description or task.title
-        desc_lower = desc.lower()
         task_type = task.task_type
 
         # Step 1: Consult decision memory for best approach
         preferred_approach = ''
         if self._decision_memory:
             try:
-                preferred_approach = self._decision_memory.get_best_approach(
-                    decision_type=_import_decision_type('APPROACH'),
-                    context_description=desc,
-                ) or ''
+                preferred_approach = (
+                    self._decision_memory.get_best_approach(
+                        decision_type=_import_decision_type('APPROACH'),
+                        context_description=desc,
+                    )
+                    or ''
+                )
             except Exception:
                 pass
 
@@ -490,45 +532,79 @@ class TaskRunner:
             except Exception:
                 pass
         if not available_tools:
-            available_tools = ['file_read', 'file_write', 'file_edit', 'shell_exec', 'search_code']
+            available_tools = [
+                'file_read',
+                'file_write',
+                'file_edit',
+                'shell_exec',
+                'search_code',
+            ]
 
         # Step 4: Generate plan based on task type and context
         if task_type == TaskType.BUG_FIX:
             steps = self._generate_bug_fix_plan(
-                task, step_id, desc, available_tools, preferred_approach, avoid_approaches
+                task,
+                step_id,
+                desc,
+                available_tools,
+                preferred_approach,
+                avoid_approaches,
             )
         elif task_type == TaskType.FEATURE:
             steps = self._generate_feature_plan(
-                task, step_id, desc, available_tools, preferred_approach, avoid_approaches
+                task,
+                step_id,
+                desc,
+                available_tools,
+                preferred_approach,
+                avoid_approaches,
             )
         elif task_type == TaskType.REFACTOR:
             steps = self._generate_refactor_plan(
-                task, step_id, desc, available_tools, preferred_approach, avoid_approaches
+                task,
+                step_id,
+                desc,
+                available_tools,
+                preferred_approach,
+                avoid_approaches,
             )
         elif task_type == TaskType.TEST:
             steps = self._generate_test_plan(
-                task, step_id, desc, available_tools, preferred_approach, avoid_approaches
+                task,
+                step_id,
+                desc,
+                available_tools,
+                preferred_approach,
+                avoid_approaches,
             )
         else:
             steps = self._generate_generic_plan(
-                task, step_id, desc, available_tools, preferred_approach, avoid_approaches
+                task,
+                step_id,
+                desc,
+                available_tools,
+                preferred_approach,
+                avoid_approaches,
             )
 
         # Step 5: Record planning decision in decision memory
         if self._decision_memory:
             try:
                 from openhands.memory.decision_memory import DecisionEntry, DecisionType
-                self._decision_memory.record(DecisionEntry(
-                    decision_type=DecisionType.APPROACH,
-                    description=f'Plan for {task_type.value}: {desc[:100]}',
-                    alternatives_considered=[task_type.value, 'generic'],
-                    chosen_alternative=task_type.value,
-                    reasoning=f'Task classified as {task_type.value}, '
-                              f'generated {len(steps)} steps, '
-                              f'preferred_approach={preferred_approach or "none"}',
-                    task_id=task.task_id,
-                    task_type=task_type.value,
-                ))
+
+                self._decision_memory.record(
+                    DecisionEntry(
+                        decision_type=DecisionType.APPROACH,
+                        description=f'Plan for {task_type.value}: {desc[:100]}',
+                        alternatives_considered=[task_type.value, 'generic'],
+                        chosen_alternative=task_type.value,
+                        reasoning=f'Task classified as {task_type.value}, '
+                        f'generated {len(steps)} steps, '
+                        f'preferred_approach={preferred_approach or "none"}',
+                        task_id=task.task_id,
+                        task_type=task_type.value,
+                    )
+                )
             except Exception:
                 pass
 
@@ -682,19 +758,22 @@ class TaskRunner:
                         DecisionOutcome,
                         DecisionType,
                     )
+
                     outcome = (
                         DecisionOutcome.SUCCESS
                         if step.status == StepStatus.COMPLETED
                         else DecisionOutcome.FAILURE
                     )
-                    self._decision_memory.record(DecisionEntry(
-                        decision_type=DecisionType.TOOL_CHOICE,
-                        description=f'Execute step: {step.description[:80]}',
-                        chosen_alternative=step.action,
-                        outcome=outcome,
-                        outcome_details=step.error or 'success',
-                        task_id=task.task_id,
-                    ))
+                    self._decision_memory.record(
+                        DecisionEntry(
+                            decision_type=DecisionType.TOOL_CHOICE,
+                            description=f'Execute step: {step.description[:80]}',
+                            chosen_alternative=step.action,
+                            outcome=outcome,
+                            outcome_details=step.error or 'success',
+                            task_id=task.task_id,
+                        )
+                    )
                 except Exception:
                     pass
 
@@ -703,13 +782,18 @@ class TaskRunner:
                 if self._error_memory:
                     try:
                         from openhands.memory.error_memory import ErrorEntry
-                        self._error_memory.record(ErrorEntry(
-                            error_type=self._classify_error_string(step.error),
-                            error_message=step.error[:500],
-                            file_path=step.target_files[0] if step.target_files else '',
-                            task_id=task.task_id,
-                            phase='execute',
-                        ))
+
+                        self._error_memory.record(
+                            ErrorEntry(
+                                error_type=self._classify_error_string(step.error),
+                                error_message=step.error[:500],
+                                file_path=step.target_files[0]
+                                if step.target_files
+                                else '',
+                                task_id=task.task_id,
+                                phase='execute',
+                            )
+                        )
                     except Exception:
                         pass
 
@@ -786,25 +870,30 @@ class TaskRunner:
             for failure in test_result.failures:
                 try:
                     from openhands.memory.error_memory import ErrorEntry
-                    self._error_memory.record(ErrorEntry(
-                        error_type='test_failure',
-                        error_message=failure.get('error', '')[:500],
-                        file_path=failure.get('file', ''),
-                        line_number=failure.get('line', 0),
-                        task_id=task.task_id,
-                        phase='test',
-                    ))
+
+                    self._error_memory.record(
+                        ErrorEntry(
+                            error_type='test_failure',
+                            error_message=failure.get('error', '')[:500],
+                            file_path=failure.get('file', ''),
+                            line_number=failure.get('line', 0),
+                            task_id=task.task_id,
+                            phase='test',
+                        )
+                    )
                 except Exception:
                     pass
 
         # Build test artifact
         artifacts = []
         if raw_output:
-            artifacts.append(TaskArtifact(
-                artifact_type=ArtifactType.TEST_RESULT,
-                name='test_output',
-                content=raw_output[:10000],
-            ))
+            artifacts.append(
+                TaskArtifact(
+                    artifact_type=ArtifactType.TEST_RESULT,
+                    name='test_output',
+                    content=raw_output[:10000],
+                )
+            )
 
         logger.info(
             f'[TaskRunner] TEST: total={test_result.total}, '
@@ -923,7 +1012,8 @@ class TaskRunner:
             # Default retry logic
             retry_recommended = (
                 task.result.retry_count < task.max_retries
-                and category in (
+                and category
+                in (
                     ErrorCategory.RUNTIME_ERROR,
                     ErrorCategory.TEST_FAILURE,
                     ErrorCategory.TIMEOUT,
@@ -932,7 +1022,8 @@ class TaskRunner:
                 )
             )
             retry_strategy = (
-                'same_approach' if task.result.retry_count == 0
+                'same_approach'
+                if task.result.retry_count == 0
                 else 'different_approach'
             )
 
@@ -956,19 +1047,26 @@ class TaskRunner:
         if self._decision_memory:
             try:
                 from openhands.memory.decision_memory import DecisionEntry, DecisionType
-                self._decision_memory.record(DecisionEntry(
-                    decision_type=DecisionType.FIX_STRATEGY,
-                    description=f'Failure analysis: {category.value} — {last_error[:80]}',
-                    alternatives_considered=['retry', 'different_approach', 'escalate'],
-                    chosen_alternative=retry_strategy,
-                    reasoning=(
-                        f'confidence={confidence:.2f}, '
-                        f'similar_errors={len(similar_errors)}, '
-                        f'suggested_fixes={len(suggested_fixes)}, '
-                        f'retry_count={task.result.retry_count}'
-                    ),
-                    task_id=task.task_id,
-                ))
+
+                self._decision_memory.record(
+                    DecisionEntry(
+                        decision_type=DecisionType.FIX_STRATEGY,
+                        description=f'Failure analysis: {category.value} — {last_error[:80]}',
+                        alternatives_considered=[
+                            'retry',
+                            'different_approach',
+                            'escalate',
+                        ],
+                        chosen_alternative=retry_strategy,
+                        reasoning=(
+                            f'confidence={confidence:.2f}, '
+                            f'similar_errors={len(similar_errors)}, '
+                            f'suggested_fixes={len(suggested_fixes)}, '
+                            f'retry_count={task.result.retry_count}'
+                        ),
+                        task_id=task.task_id,
+                    )
+                )
             except Exception:
                 pass
 
@@ -1000,20 +1098,111 @@ class TaskRunner:
     def _handle_retry_or_fix(self, task: Task) -> PhaseResult:
         """RETRY_OR_FIX: Apply fix strategy and prepare for retry.
 
-        If a fixer integration is set, delegates to it.
-        Otherwise, just signals readiness to retry.
+        Fix #8: RetryPolicy is consulted FIRST for the retry/escalate decision.
+        The policy drives whether we retry, apply a fix, or escalate — not just
+        a hardcoded retry count check.
+
+        Flow:
+        1. Consult RetryPolicy for decision (retry / escalate / abort)
+        2. If policy says retry AND fixer is available: apply fix first
+        3. If policy says retry without fixer: signal plain retry
+        4. If policy says escalate/abort: signal failure
+        5. Record decision in FixMemory for future reference
         """
+        retry_count = task.result.retry_count
+        max_retries = task.max_retries
+
+        # ── Step 1: Consult RetryPolicy (Fix #8) ──────────────────────────
+        policy_decision = 'retry'  # default if no policy
+        policy_reason = 'no policy configured'
+
+        # Read the decision from FAILURE_ANALYSIS context (already called
+        # should_retry there — calling again would double-record in history).
+        fa = getattr(task.context, 'failure_analysis', None)
+        if fa and hasattr(fa, 'retry_recommended'):
+            if fa.retry_recommended:
+                policy_decision = getattr(fa, 'retry_strategy', 'retry')
+                policy_reason = 'from failure_analysis context'
+            else:
+                policy_decision = 'escalate'
+                policy_reason = 'failure_analysis recommends no retry'
+        elif self._retry_policy:
+            # Fallback: FAILURE_ANALYSIS didn't run or had no decision
+            try:
+                decision = self._retry_policy.should_retry(
+                    task_id=task.task_id,
+                    error=task.result.error or '',
+                    error_type=task.result.error_category
+                    if hasattr(task.result, 'error_category')
+                    else '',
+                    attempt=retry_count,
+                )
+                # RetryPolicy returns a RetryDecision dataclass
+                if decision.should_retry:
+                    policy_decision = decision.strategy.value
+                    policy_reason = decision.reason
+                else:
+                    policy_decision = 'escalate'
+                    policy_reason = decision.reason
+            except Exception as exc:
+                logger.warning(f'[TaskRunner] RetryPolicy failed: {exc}')
+                policy_decision = 'retry'
+                policy_reason = f'policy error, defaulting to retry: {exc}'
+
+        logger.info(
+            f'[TaskRunner] RETRY_OR_FIX: policy_decision={policy_decision}, '
+            f'reason={policy_reason}, retry_count={retry_count}/{max_retries}'
+        )
+
+        # ── Step 2: If policy says escalate/abort, stop ────────────────────
+        if policy_decision in ('escalate', 'abort', 'stop'):
+            return PhaseResult(
+                phase=TaskPhase.RETRY_OR_FIX,
+                success=False,
+                error=f'RetryPolicy: {policy_decision} — {policy_reason}',
+                output={
+                    'strategy': policy_decision,
+                    'policy_reason': policy_reason,
+                    'retry_count': retry_count,
+                },
+            )
+
+        # ── Step 3: Apply fix if fixer available ───────────────────────────
         if self._fixer:
             try:
                 fix_result = self._fixer(task)
+                strategy = fix_result.get('strategy', 'fix_applied')
                 logger.info(
-                    f'[TaskRunner] RETRY_OR_FIX: '
-                    f'strategy={fix_result.get("strategy", "unknown")}'
+                    f'[TaskRunner] RETRY_OR_FIX: fix applied, strategy={strategy}'
                 )
+
+                # Record in FixMemory for future reference (Fix #8)
+                if self._fix_memory:
+                    try:
+                        from openhands.memory.fix_memory import FixEntry
+
+                        fix_success = fix_result.get('success', True)
+                        self._fix_memory.record_fix(
+                            FixEntry(
+                                error_type=task.result.error_category
+                                if hasattr(task.result, 'error_category')
+                                else '',
+                                fix_description=strategy,
+                                success_count=1 if fix_success else 0,
+                                failure_count=0 if fix_success else 1,
+                            )
+                        )
+                    except Exception:
+                        pass
+
                 return PhaseResult(
                     phase=TaskPhase.RETRY_OR_FIX,
                     success=fix_result.get('success', True),
-                    output=fix_result,
+                    output={
+                        **fix_result,
+                        'policy_decision': policy_decision,
+                        'policy_reason': policy_reason,
+                    },
                 )
             except Exception as exc:
                 return PhaseResult(
@@ -1022,13 +1211,15 @@ class TaskRunner:
                     error=f'Fixer failed: {exc}',
                 )
 
-        # Default: signal retry with no fix applied
+        # ── Step 4: Plain retry (no fixer) ─────────────────────────────────
         return PhaseResult(
             phase=TaskPhase.RETRY_OR_FIX,
             success=True,
             output={
                 'strategy': 'retry_without_fix',
-                'retry_count': task.result.retry_count,
+                'policy_decision': policy_decision,
+                'policy_reason': policy_reason,
+                'retry_count': retry_count,
             },
         )
 
@@ -1050,9 +1241,7 @@ class TaskRunner:
             try:
                 review_result = self._reviewer(task)
                 approved = review_result.get('approved', True)
-                logger.info(
-                    f'[TaskRunner] REVIEW: approved={approved}'
-                )
+                logger.info(f'[TaskRunner] REVIEW: approved={approved}')
                 return PhaseResult(
                     phase=TaskPhase.REVIEW,
                     success=approved,
@@ -1086,53 +1275,69 @@ class TaskRunner:
         # ── 1. Code diff artifact ─────────────────────────────────────────
         diff_content = self._generate_code_diff(task)
         if diff_content:
-            artifacts.append(TaskArtifact(
-                artifact_type=ArtifactType.CODE_DIFF,
-                name='changes.diff',
-                content=diff_content,
-            ))
+            artifacts.append(
+                TaskArtifact(
+                    artifact_type=ArtifactType.CODE_DIFF,
+                    name='changes.diff',
+                    content=diff_content,
+                )
+            )
 
         # ── 2. Execution log artifact ─────────────────────────────────────
         exec_log = self._generate_execution_log(task)
-        artifacts.append(TaskArtifact(
-            artifact_type=ArtifactType.EXECUTION_LOG,
-            name='execution_log.txt',
-            content=exec_log,
-        ))
+        artifacts.append(
+            TaskArtifact(
+                artifact_type=ArtifactType.EXECUTION_LOG,
+                name='execution_log.txt',
+                content=exec_log,
+            )
+        )
 
         # ── 3. Execution trace (phase-by-phase results) ──────────────────
         trace_content = self._generate_execution_trace(task)
-        artifacts.append(TaskArtifact(
-            artifact_type=ArtifactType.EXECUTION_TRACE,
-            name='execution_trace.json',
-            content=trace_content,
-        ))
+        artifacts.append(
+            TaskArtifact(
+                artifact_type=ArtifactType.EXECUTION_TRACE,
+                name='execution_trace.json',
+                content=trace_content,
+            )
+        )
 
         # ── 4. Test results artifact ──────────────────────────────────────
         if task.context.test_result:
             import json
-            artifacts.append(TaskArtifact(
-                artifact_type=ArtifactType.TEST_RESULT,
-                name='test_results.json',
-                content=json.dumps(task.context.test_result.to_dict(), indent=2),
-            ))
+
+            artifacts.append(
+                TaskArtifact(
+                    artifact_type=ArtifactType.TEST_RESULT,
+                    name='test_results.json',
+                    content=json.dumps(task.context.test_result.to_dict(), indent=2),
+                )
+            )
 
         # ── 5. Failure analysis artifact ──────────────────────────────────
         if task.context.failure_analysis:
             import json
-            artifacts.append(TaskArtifact(
-                artifact_type=ArtifactType.ERROR_REPORT,
-                name='failure_analysis.json',
-                content=json.dumps(task.context.failure_analysis.to_dict(), indent=2),
-            ))
+
+            artifacts.append(
+                TaskArtifact(
+                    artifact_type=ArtifactType.ERROR_REPORT,
+                    name='failure_analysis.json',
+                    content=json.dumps(
+                        task.context.failure_analysis.to_dict(), indent=2
+                    ),
+                )
+            )
 
         # ── 6. Summary artifact ───────────────────────────────────────────
         summary = self._generate_summary(task)
-        artifacts.append(TaskArtifact(
-            artifact_type=ArtifactType.SUMMARY,
-            name='summary.md',
-            content=summary,
-        ))
+        artifacts.append(
+            TaskArtifact(
+                artifact_type=ArtifactType.SUMMARY,
+                name='summary.md',
+                content=summary,
+            )
+        )
 
         # ── 7. Delegate to ArtifactBuilder for disk persistence ───────────
         if self._artifact_builder:
@@ -1140,9 +1345,7 @@ class TaskRunner:
                 if diff_content:
                     self._artifact_builder.add_diff(diff_content)
                 self._artifact_builder.add_log(exec_log)
-                self._artifact_builder.add_execution_trace(
-                    task.result.phase_results
-                )
+                self._artifact_builder.add_execution_trace(task.result.phase_results)
                 if task.context.test_result:
                     self._artifact_builder.add_test_result(
                         task.context.test_result.to_dict()
@@ -1161,11 +1364,13 @@ class TaskRunner:
                 logger.warning(
                     f'[TaskRunner] ARTIFACT_GENERATION integration failed: {exc}'
                 )
-                artifacts.append(TaskArtifact(
-                    artifact_type=ArtifactType.ERROR_REPORT,
-                    name='artifact_generation_error',
-                    content=str(exc),
-                ))
+                artifacts.append(
+                    TaskArtifact(
+                        artifact_type=ArtifactType.ERROR_REPORT,
+                        name='artifact_generation_error',
+                        content=str(exc),
+                    )
+                )
 
         logger.info(
             f'[TaskRunner] ARTIFACT_GENERATION: {len(artifacts)} artifacts '
@@ -1213,62 +1418,75 @@ class TaskRunner:
         sid = start_id
 
         # Step 1: Analyze the bug — read error context and related files
-        steps.append(PlanStep(
-            step_id=sid,
-            action='analyze',
-            description=f'Analyze bug: {desc[:120]}',
-            tools_allowed=['file_read', 'search_code'],
-            decision_reasoning='Bug fix starts with understanding the error context',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='analyze',
+                description=f'Analyze bug: {desc[:120]}',
+                tools_allowed=['file_read', 'search_code'],
+                decision_reasoning='Bug fix starts with understanding the error context',
+            )
+        )
         sid += 1
 
         # Step 2: Locate affected files using repo structure
         target_files = self._infer_target_files(task)
-        steps.append(PlanStep(
-            step_id=sid,
-            action='analyze',
-            description='Locate affected files and trace error origin',
-            target_files=target_files,
-            tools_allowed=['file_read', 'search_code'],
-            dependencies=[str(sid - 1)],
-            decision_reasoning='Need to find exactly which files contain the bug',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='analyze',
+                description='Locate affected files and trace error origin',
+                target_files=target_files,
+                tools_allowed=['file_read', 'search_code'],
+                dependencies=[str(sid - 1)],
+                decision_reasoning='Need to find exactly which files contain the bug',
+            )
+        )
         sid += 1
 
         # Step 3: Implement the fix
-        steps.append(PlanStep(
-            step_id=sid,
-            action='file_edit',
-            description='Apply bug fix to affected files',
-            target_files=target_files,
-            tools_allowed=['file_edit', 'file_write'],
-            dependencies=[str(sid - 1)],
-            decision_reasoning=preferred or 'Direct fix based on error analysis',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='file_edit',
+                description='Apply bug fix to affected files',
+                target_files=target_files,
+                tools_allowed=['file_edit', 'file_write'],
+                dependencies=[str(sid - 1)],
+                decision_reasoning=preferred or 'Direct fix based on error analysis',
+            )
+        )
         sid += 1
 
         # Step 4: Run relevant tests
-        steps.append(PlanStep(
-            step_id=sid,
-            action='shell_command',
-            description='Run tests to verify the fix',
-            commands=self._infer_test_commands(task),
-            tools_allowed=['shell_exec', 'run_tests'],
-            dependencies=[str(sid - 1)],
-            decision_reasoning='Verify fix does not break existing functionality',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='shell_command',
+                description='Run tests to verify the fix',
+                commands=self._infer_test_commands(task),
+                tools_allowed=['shell_exec', 'run_tests'],
+                dependencies=[str(sid - 1)],
+                decision_reasoning='Verify fix does not break existing functionality',
+            )
+        )
         sid += 1
 
         # Step 5: Commit changes
-        steps.append(PlanStep(
-            step_id=sid,
-            action='shell_command',
-            description='Commit the bug fix',
-            commands=['git add -A', f'git commit -m {shlex.quote("fix: " + desc[:60])}'],
-            tools_allowed=['shell_exec', 'git_commit'],
-            dependencies=[str(sid - 1)],
-            decision_reasoning='Commit verified fix',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='shell_command',
+                description='Commit the bug fix',
+                commands=[
+                    'git add -A',
+                    f'git commit -m {shlex.quote("fix: " + desc[:60])}',
+                ],
+                tools_allowed=['shell_exec', 'git_commit'],
+                dependencies=[str(sid - 1)],
+                decision_reasoning='Commit verified fix',
+            )
+        )
 
         return steps
 
@@ -1286,63 +1504,76 @@ class TaskRunner:
         sid = start_id
 
         # Step 1: Understand existing code structure
-        steps.append(PlanStep(
-            step_id=sid,
-            action='analyze',
-            description=f'Analyze codebase for feature: {desc[:100]}',
-            tools_allowed=['file_read', 'search_code'],
-            decision_reasoning='Understand existing patterns before adding new code',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='analyze',
+                description=f'Analyze codebase for feature: {desc[:100]}',
+                tools_allowed=['file_read', 'search_code'],
+                decision_reasoning='Understand existing patterns before adding new code',
+            )
+        )
         sid += 1
 
         # Step 2: Create or modify files
         target_files = self._infer_target_files(task)
-        steps.append(PlanStep(
-            step_id=sid,
-            action='file_edit',
-            description='Implement the feature — create/modify files',
-            target_files=target_files,
-            tools_allowed=['file_write', 'file_edit'],
-            dependencies=[str(sid - 1)],
-            decision_reasoning=preferred or 'Implement based on existing patterns',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='file_edit',
+                description='Implement the feature — create/modify files',
+                target_files=target_files,
+                tools_allowed=['file_write', 'file_edit'],
+                dependencies=[str(sid - 1)],
+                decision_reasoning=preferred or 'Implement based on existing patterns',
+            )
+        )
         sid += 1
 
         # Step 3: Install dependencies if needed
         dep_keywords = ['install', 'package', 'dependency', 'import', 'require']
         if any(kw in desc.lower() for kw in dep_keywords):
-            steps.append(PlanStep(
-                step_id=sid,
-                action='install_dep',
-                description='Install required dependencies',
-                tools_allowed=['shell_exec'],
-                dependencies=[str(sid - 1)],
-                decision_reasoning='Feature requires new dependencies',
-            ))
+            steps.append(
+                PlanStep(
+                    step_id=sid,
+                    action='install_dep',
+                    description='Install required dependencies',
+                    tools_allowed=['shell_exec'],
+                    dependencies=[str(sid - 1)],
+                    decision_reasoning='Feature requires new dependencies',
+                )
+            )
             sid += 1
 
         # Step 4: Run tests
-        steps.append(PlanStep(
-            step_id=sid,
-            action='shell_command',
-            description='Run tests to verify feature works',
-            commands=self._infer_test_commands(task),
-            tools_allowed=['shell_exec', 'run_tests'],
-            dependencies=[str(sid - 1)],
-            decision_reasoning='Verify feature integrates without breaking existing code',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='shell_command',
+                description='Run tests to verify feature works',
+                commands=self._infer_test_commands(task),
+                tools_allowed=['shell_exec', 'run_tests'],
+                dependencies=[str(sid - 1)],
+                decision_reasoning='Verify feature integrates without breaking existing code',
+            )
+        )
         sid += 1
 
         # Step 5: Commit
-        steps.append(PlanStep(
-            step_id=sid,
-            action='shell_command',
-            description='Commit feature implementation',
-            commands=['git add -A', f'git commit -m {shlex.quote("feat: " + desc[:60])}'],
-            tools_allowed=['shell_exec', 'git_commit'],
-            dependencies=[str(sid - 1)],
-            decision_reasoning='Commit verified feature',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='shell_command',
+                description='Commit feature implementation',
+                commands=[
+                    'git add -A',
+                    f'git commit -m {shlex.quote("feat: " + desc[:60])}',
+                ],
+                tools_allowed=['shell_exec', 'git_commit'],
+                dependencies=[str(sid - 1)],
+                decision_reasoning='Commit verified feature',
+            )
+        )
 
         return steps
 
@@ -1360,62 +1591,75 @@ class TaskRunner:
         sid = start_id
 
         # Step 1: Map files to refactor
-        steps.append(PlanStep(
-            step_id=sid,
-            action='analyze',
-            description=f'Map files and dependencies for refactor: {desc[:80]}',
-            tools_allowed=['file_read', 'search_code'],
-            decision_reasoning='Refactoring requires full impact analysis first',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='analyze',
+                description=f'Map files and dependencies for refactor: {desc[:80]}',
+                tools_allowed=['file_read', 'search_code'],
+                decision_reasoning='Refactoring requires full impact analysis first',
+            )
+        )
         sid += 1
 
         # Step 2: Run tests before refactor (baseline)
-        steps.append(PlanStep(
-            step_id=sid,
-            action='shell_command',
-            description='Run tests before refactor to establish baseline',
-            commands=self._infer_test_commands(task),
-            tools_allowed=['shell_exec', 'run_tests'],
-            dependencies=[str(sid - 1)],
-            decision_reasoning='Establish passing baseline before changes',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='shell_command',
+                description='Run tests before refactor to establish baseline',
+                commands=self._infer_test_commands(task),
+                tools_allowed=['shell_exec', 'run_tests'],
+                dependencies=[str(sid - 1)],
+                decision_reasoning='Establish passing baseline before changes',
+            )
+        )
         sid += 1
 
         # Step 3: Apply refactoring changes
         target_files = self._infer_target_files(task)
-        steps.append(PlanStep(
-            step_id=sid,
-            action='file_edit',
-            description='Apply refactoring changes',
-            target_files=target_files,
-            tools_allowed=['file_edit', 'file_write'],
-            dependencies=[str(sid - 1)],
-            decision_reasoning=preferred or 'Apply targeted refactoring',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='file_edit',
+                description='Apply refactoring changes',
+                target_files=target_files,
+                tools_allowed=['file_edit', 'file_write'],
+                dependencies=[str(sid - 1)],
+                decision_reasoning=preferred or 'Apply targeted refactoring',
+            )
+        )
         sid += 1
 
         # Step 4: Run tests after refactor
-        steps.append(PlanStep(
-            step_id=sid,
-            action='shell_command',
-            description='Run tests after refactor to verify no regressions',
-            commands=self._infer_test_commands(task),
-            tools_allowed=['shell_exec', 'run_tests'],
-            dependencies=[str(sid - 1)],
-            decision_reasoning='Verify refactoring preserves behavior',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='shell_command',
+                description='Run tests after refactor to verify no regressions',
+                commands=self._infer_test_commands(task),
+                tools_allowed=['shell_exec', 'run_tests'],
+                dependencies=[str(sid - 1)],
+                decision_reasoning='Verify refactoring preserves behavior',
+            )
+        )
         sid += 1
 
         # Step 5: Commit
-        steps.append(PlanStep(
-            step_id=sid,
-            action='shell_command',
-            description='Commit refactoring',
-            commands=['git add -A', f'git commit -m {shlex.quote("refactor: " + desc[:60])}'],
-            tools_allowed=['shell_exec', 'git_commit'],
-            dependencies=[str(sid - 1)],
-            decision_reasoning='Commit verified refactor with no regressions',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='shell_command',
+                description='Commit refactoring',
+                commands=[
+                    'git add -A',
+                    f'git commit -m {shlex.quote("refactor: " + desc[:60])}',
+                ],
+                tools_allowed=['shell_exec', 'git_commit'],
+                dependencies=[str(sid - 1)],
+                decision_reasoning='Commit verified refactor with no regressions',
+            )
+        )
 
         return steps
 
@@ -1433,48 +1677,59 @@ class TaskRunner:
         sid = start_id
 
         # Step 1: Analyze what needs testing
-        steps.append(PlanStep(
-            step_id=sid,
-            action='analyze',
-            description=f'Analyze testing needs: {desc[:100]}',
-            tools_allowed=['file_read', 'search_code'],
-            decision_reasoning='Identify modules and functions needing tests',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='analyze',
+                description=f'Analyze testing needs: {desc[:100]}',
+                tools_allowed=['file_read', 'search_code'],
+                decision_reasoning='Identify modules and functions needing tests',
+            )
+        )
         sid += 1
 
         # Step 2: Write test files
-        steps.append(PlanStep(
-            step_id=sid,
-            action='create_file',
-            description='Write test files',
-            tools_allowed=['file_write'],
-            dependencies=[str(sid - 1)],
-            decision_reasoning='Create tests based on analysis',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='create_file',
+                description='Write test files',
+                tools_allowed=['file_write'],
+                dependencies=[str(sid - 1)],
+                decision_reasoning='Create tests based on analysis',
+            )
+        )
         sid += 1
 
         # Step 3: Run new tests
-        steps.append(PlanStep(
-            step_id=sid,
-            action='shell_command',
-            description='Run newly created tests',
-            commands=self._infer_test_commands(task),
-            tools_allowed=['shell_exec', 'run_tests'],
-            dependencies=[str(sid - 1)],
-            decision_reasoning='Verify tests pass and provide coverage',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='shell_command',
+                description='Run newly created tests',
+                commands=self._infer_test_commands(task),
+                tools_allowed=['shell_exec', 'run_tests'],
+                dependencies=[str(sid - 1)],
+                decision_reasoning='Verify tests pass and provide coverage',
+            )
+        )
         sid += 1
 
         # Step 4: Commit
-        steps.append(PlanStep(
-            step_id=sid,
-            action='shell_command',
-            description='Commit new tests',
-            commands=['git add -A', f'git commit -m {shlex.quote("test: " + desc[:60])}'],
-            tools_allowed=['shell_exec', 'git_commit'],
-            dependencies=[str(sid - 1)],
-            decision_reasoning='Commit passing tests',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='shell_command',
+                description='Commit new tests',
+                commands=[
+                    'git add -A',
+                    f'git commit -m {shlex.quote("test: " + desc[:60])}',
+                ],
+                tools_allowed=['shell_exec', 'git_commit'],
+                dependencies=[str(sid - 1)],
+                decision_reasoning='Commit passing tests',
+            )
+        )
 
         return steps
 
@@ -1492,50 +1747,61 @@ class TaskRunner:
         sid = start_id
 
         # Step 1: Analyze
-        steps.append(PlanStep(
-            step_id=sid,
-            action='analyze',
-            description=f'Analyze task: {desc[:120]}',
-            tools_allowed=['file_read', 'search_code'],
-            decision_reasoning='Understand the task before execution',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='analyze',
+                description=f'Analyze task: {desc[:120]}',
+                tools_allowed=['file_read', 'search_code'],
+                decision_reasoning='Understand the task before execution',
+            )
+        )
         sid += 1
 
         # Step 2: Execute main work
         target_files = self._infer_target_files(task)
-        steps.append(PlanStep(
-            step_id=sid,
-            action='file_edit',
-            description=f'Execute: {desc[:100]}',
-            target_files=target_files,
-            tools_allowed=tools,
-            dependencies=[str(sid - 1)],
-            decision_reasoning=preferred or 'Execute based on analysis',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='file_edit',
+                description=f'Execute: {desc[:100]}',
+                target_files=target_files,
+                tools_allowed=tools,
+                dependencies=[str(sid - 1)],
+                decision_reasoning=preferred or 'Execute based on analysis',
+            )
+        )
         sid += 1
 
         # Step 3: Verify
-        steps.append(PlanStep(
-            step_id=sid,
-            action='shell_command',
-            description='Verify changes work correctly',
-            commands=self._infer_test_commands(task),
-            tools_allowed=['shell_exec', 'run_tests'],
-            dependencies=[str(sid - 1)],
-            decision_reasoning='Verify execution results',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='shell_command',
+                description='Verify changes work correctly',
+                commands=self._infer_test_commands(task),
+                tools_allowed=['shell_exec', 'run_tests'],
+                dependencies=[str(sid - 1)],
+                decision_reasoning='Verify execution results',
+            )
+        )
         sid += 1
 
         # Step 4: Commit
-        steps.append(PlanStep(
-            step_id=sid,
-            action='shell_command',
-            description='Commit changes',
-            commands=['git add -A', f'git commit -m {shlex.quote("chore: " + desc[:60])}'],
-            tools_allowed=['shell_exec', 'git_commit'],
-            dependencies=[str(sid - 1)],
-            decision_reasoning='Commit verified work',
-        ))
+        steps.append(
+            PlanStep(
+                step_id=sid,
+                action='shell_command',
+                description='Commit changes',
+                commands=[
+                    'git add -A',
+                    f'git commit -m {shlex.quote("chore: " + desc[:60])}',
+                ],
+                tools_allowed=['shell_exec', 'git_commit'],
+                dependencies=[str(sid - 1)],
+                decision_reasoning='Commit verified work',
+            )
+        )
 
         return steps
 
@@ -1549,7 +1815,9 @@ class TaskRunner:
 
         # Extract file paths from description
         if task.description:
-            path_pattern = re.compile(r'[\w/]+\.(?:py|ts|tsx|js|jsx|rs|go|java|rb|yaml|yml|json|md)')
+            path_pattern = re.compile(
+                r'[\w/]+\.(?:py|ts|tsx|js|jsx|rs|go|java|rb|yaml|yml|json|md)'
+            )
             matches = path_pattern.findall(task.description)
             for m in matches:
                 if m not in files:
@@ -1598,9 +1866,7 @@ class TaskRunner:
                         return False
         return True
 
-    def _execute_single_step(
-        self, task: Task, step: PlanStep
-    ) -> dict[str, Any]:
+    def _execute_single_step(self, task: Task, step: PlanStep) -> dict[str, Any]:
         """Execute a single plan step.
 
         If an executor integration is set, delegates to it with the current
@@ -1706,7 +1972,10 @@ class TaskRunner:
 
         # Try common test runners
         test_cmds = [
-            ('python -m pytest --tb=short -q', ['pyproject.toml', 'setup.py', 'setup.cfg']),
+            (
+                'python -m pytest --tb=short -q',
+                ['pyproject.toml', 'setup.py', 'setup.cfg'],
+            ),
             ('npm test', ['package.json']),
             ('cargo test', ['Cargo.toml']),
             ('go test ./...', ['go.mod']),
@@ -1785,23 +2054,25 @@ class TaskRunner:
             result.errors = int(pytest_summary.group(3) or 0)
             result.skipped = int(pytest_summary.group(4) or 0)
             result.duration_s = float(pytest_summary.group(5))
-            result.total = result.passed + result.failed + result.errors + result.skipped
+            result.total = (
+                result.passed + result.failed + result.errors + result.skipped
+            )
 
         # ── Parse pytest FAILED lines ──
         # "FAILED tests/test_foo.py::test_bar - AssertionError: ..."
-        failed_pattern = re.compile(
-            r'FAILED\s+([\w/.\-:]+)\s*-\s*(.*?)$', re.MULTILINE
-        )
+        failed_pattern = re.compile(r'FAILED\s+([\w/.\-:]+)\s*-\s*(.*?)$', re.MULTILINE)
         for match in failed_pattern.finditer(raw_output):
             test_name = match.group(1)
             error_msg = match.group(2).strip()
             file_path = test_name.split('::')[0] if '::' in test_name else ''
-            result.failures.append({
-                'test_name': test_name,
-                'error': error_msg[:300],
-                'file': file_path,
-                'line': 0,
-            })
+            result.failures.append(
+                {
+                    'test_name': test_name,
+                    'error': error_msg[:300],
+                    'file': file_path,
+                    'line': 0,
+                }
+            )
             # Classify error type
             error_type = _classify_test_error(error_msg)
             result.error_types[error_type] = result.error_types.get(error_type, 0) + 1
@@ -1840,10 +2111,14 @@ class TaskRunner:
 
         # Ensure total is at least sum of parts
         if result.total == 0:
-            result.total = result.passed + result.failed + result.errors + result.skipped
+            result.total = (
+                result.passed + result.failed + result.errors + result.skipped
+            )
 
         # Extract coverage if present
-        coverage_match = re.search(r'(\d+(?:\.\d+)?)%\s*(?:coverage|cov)', raw_output, re.IGNORECASE)
+        coverage_match = re.search(
+            r'(\d+(?:\.\d+)?)%\s*(?:coverage|cov)', raw_output, re.IGNORECASE
+        )
         if coverage_match:
             result.coverage_percent = float(coverage_match.group(1))
 
@@ -1915,7 +2190,10 @@ class TaskRunner:
         if any(w in lower for w in ['assert', 'test fail', 'expected', 'failed']):
             if 'test' in lower:
                 return ErrorCategory.TEST_FAILURE
-        if any(w in lower for w in ['install', 'dependency', 'package', 'pip', 'npm', 'poetry']):
+        if any(
+            w in lower
+            for w in ['install', 'dependency', 'package', 'pip', 'npm', 'poetry']
+        ):
             return ErrorCategory.DEPENDENCY_ERROR
         if any(w in lower for w in ['timeout', 'timed out']):
             return ErrorCategory.TIMEOUT
@@ -1929,7 +2207,9 @@ class TaskRunner:
         return ErrorCategory.RUNTIME_ERROR
 
     @staticmethod
-    def _compute_classification_confidence(error: str, category: ErrorCategory) -> float:
+    def _compute_classification_confidence(
+        error: str, category: ErrorCategory
+    ) -> float:
         """Compute confidence score for the error classification."""
         if not error:
             return 0.0
@@ -1983,7 +2263,9 @@ class TaskRunner:
         if not error:
             return []
         # Match file paths with line numbers
-        pattern = re.compile(r'["\']?([\w/.\-]+\.(?:py|ts|tsx|js|jsx|rs|go|java|rb))["\']?(?::(\d+))?')
+        pattern = re.compile(
+            r'["\']?([\w/.\-]+\.(?:py|ts|tsx|js|jsx|rs|go|java|rb))["\']?(?::(\d+))?'
+        )
         files: list[str] = []
         for match in pattern.finditer(error):
             f = match.group(1)
@@ -2098,7 +2380,9 @@ class TaskRunner:
             if tr.failures:
                 lines.append('  Failures:')
                 for f in tr.failures[:5]:
-                    lines.append(f'    - {f.get("test_name", "?")}: {f.get("error", "")[:100]}')
+                    lines.append(
+                        f'    - {f.get("test_name", "?")}: {f.get("error", "")[:100]}'
+                    )
             lines.append('')
 
         # Failure analysis
@@ -2118,6 +2402,7 @@ class TaskRunner:
     def _generate_execution_trace(task: Task) -> str:
         """Generate JSON execution trace from phase results."""
         import json
+
         trace = {
             'task_id': task.task_id,
             'title': task.title,
@@ -2182,7 +2467,7 @@ class TaskRunner:
         lines.append('')
 
         if task.result.error:
-            lines.append(f'## Error')
+            lines.append('## Error')
             lines.append(f'```\n{task.result.error[:500]}\n```')
 
         return '\n'.join(lines)
@@ -2213,6 +2498,7 @@ def _import_decision_type(name: str) -> Any:
     """Import DecisionType enum value by name."""
     try:
         from openhands.memory.decision_memory import DecisionType
+
         return getattr(DecisionType, name)
     except Exception:
         return name
