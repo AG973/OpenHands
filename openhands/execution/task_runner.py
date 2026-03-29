@@ -237,6 +237,7 @@ class TaskRunner:
                 pass
 
         start = time.time()
+        result: PhaseResult | None = None
         try:
             result = handler(task)
             result.duration_s = time.time() - start
@@ -244,19 +245,6 @@ class TaskRunner:
                 f'[TaskRunner] Phase {phase.value} completed: '
                 f'success={result.success}, duration={result.duration_s:.2f}s'
             )
-
-            # Fire post-phase plugin hook
-            if self._hook_runner:
-                try:
-                    self._hook_runner.fire(
-                        'post_phase',
-                        phase=phase.value,
-                        task_id=task.task_id,
-                        success=result.success,
-                    )
-                except Exception:
-                    pass
-
             return result
         except Exception as exc:
             duration = time.time() - start
@@ -264,7 +252,7 @@ class TaskRunner:
             logger.error(
                 f'[TaskRunner] Phase {phase.value} failed: {error_msg}'
             )
-            return PhaseResult(
+            result = PhaseResult(
                 phase=phase,
                 success=False,
                 error=error_msg,
@@ -277,6 +265,20 @@ class TaskRunner:
                     )
                 ],
             )
+            return result
+        finally:
+            # Fire post-phase plugin hook in finally to guarantee symmetric
+            # pre_phase/post_phase lifecycle even when the handler raises.
+            if self._hook_runner and result is not None:
+                try:
+                    self._hook_runner.fire(
+                        'post_phase',
+                        phase=phase.value,
+                        task_id=task.task_id,
+                        success=result.success,
+                    )
+                except Exception:
+                    pass
 
     def register_handler(
         self, phase: TaskPhase, handler: Callable[[Task], PhaseResult]

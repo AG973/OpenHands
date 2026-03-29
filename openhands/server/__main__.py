@@ -23,8 +23,20 @@ def main():
         log_config = get_uvicorn_json_log_config()
 
     if server_version == 'v1':
-        app_module = 'openhands.app_server:app'
-        logger.info('[Server] Starting V1 canonical app_server')
+        # Verify that the V1 app_server actually exports an `app` before starting
+        try:
+            import importlib
+            mod = importlib.import_module('openhands.app_server')
+            if not hasattr(mod, 'app'):
+                raise AttributeError("openhands.app_server has no 'app' attribute")
+            app_module = 'openhands.app_server:app'
+            logger.info('[Server] Starting V1 canonical app_server')
+        except (ImportError, AttributeError) as exc:
+            logger.warning(
+                f'[Server] V1 app_server not available ({exc}), '
+                f'falling back to V0 server'
+            )
+            app_module = 'openhands.server.listen:app'
     else:
         app_module = 'openhands.server.listen:app'
         logger.info('[Server] Starting legacy V0 server (set OPENHANDS_SERVER_VERSION=v1 for canonical path)')
