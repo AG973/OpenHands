@@ -27,6 +27,7 @@ def main():
         # V1 canonical path (opt-in until app_server:app is implemented)
         try:
             import importlib
+
             mod = importlib.import_module('openhands.app_server')
             if not hasattr(mod, 'app'):
                 raise AttributeError("openhands.app_server has no 'app' attribute")

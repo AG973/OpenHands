@@ -99,9 +99,7 @@ class EngineeringOS:
 
         # Track initialization
         self._subsystem_report = self._build_subsystem_report()
-        logger.info(
-            f'[EngineeringOS] Initialized — {self._subsystem_report}'
-        )
+        logger.info(f'[EngineeringOS] Initialized — {self._subsystem_report}')
 
     @property
     def engine(self) -> TaskEngine:
@@ -210,9 +208,7 @@ class EngineeringOS:
         # Import here to avoid circular imports at module level
         from openhands.core.main import run_controller
 
-        logger.info(
-            '[EngineeringOS] run_controller_async: canonical TaskEngine path'
-        )
+        logger.info('[EngineeringOS] run_controller_async: canonical TaskEngine path')
 
         # ── Fire pre-task plugin hooks (Fix #6: lifecycle ownership) ───────
         if self._hook_runner:
@@ -264,11 +260,7 @@ class EngineeringOS:
                 # avoid duplicate hook execution.
 
                 # Fix #7: REPO_ANALYSIS mandatory gate
-                if (
-                    phase == TaskPhase.PLAN
-                    and not repo_analysis_passed
-                    and repo_path
-                ):
+                if phase == TaskPhase.PLAN and not repo_analysis_passed and repo_path:
                     logger.error(
                         f'[EngineeringOS] PLAN blocked: REPO_ANALYSIS gate '
                         f'not passed for task {task_id}'
@@ -362,6 +354,7 @@ class EngineeringOS:
                     execute_success = False
                     if state and hasattr(state, 'agent_state'):
                         from openhands.core.schema import AgentState
+
                         execute_success = state.agent_state == AgentState.FINISHED
 
                     if task:
@@ -384,14 +377,11 @@ class EngineeringOS:
                             TaskPhase.ARTIFACT_GENERATION,
                         ]
                         for phase in post_phases:
-                            post_result = self._engine.runner.run_phase(
-                                phase, task
-                            )
+                            post_result = self._engine.runner.run_phase(phase, task)
                             task.result.set_phase_result(
                                 phase.value,
                                 post_result.success,
-                                post_result.error
-                                or str(post_result.output)[:500],
+                                post_result.error or str(post_result.output)[:500],
                             )
 
                             # Collect artifacts
@@ -402,6 +392,7 @@ class EngineeringOS:
                     if task and not task.result.error:
                         if state and hasattr(state, 'agent_state'):
                             from openhands.core.schema import AgentState
+
                             task.result.success = (
                                 state.agent_state == AgentState.FINISHED
                             )
@@ -410,9 +401,7 @@ class EngineeringOS:
                             )
                         else:
                             task.result.success = False
-                            task.result.error = (
-                                'No state returned from controller'
-                            )
+                            task.result.error = 'No state returned from controller'
         finally:
             # ── Fire post-task hook (Fix #6: symmetric lifecycle) ──────────
             # Guaranteed to fire whenever pre_task fired, regardless of
@@ -478,8 +467,7 @@ class EngineeringOS:
             try:
                 recent = self._error_memory.get_recent(limit=10)
                 context.error_memory = [
-                    {'type': e.error_type, 'message': e.error_message}
-                    for e in recent
+                    {'type': e.error_type, 'message': e.error_message} for e in recent
                 ]
             except Exception:
                 pass
@@ -497,22 +485,22 @@ class EngineeringOS:
         # Create and register all roles
         manager = ManagerAgent()
         manager.set_retry_limits(debug_retries=max_retries, total_retries=max_retries)
-        manager.register_all_roles([
-            PlannerAgent(),
-            ArchitectAgent(),
-            CoderAgent(),
-            TesterAgent(),
-            DebuggerAgent(),
-            ReviewerAgent(),
-        ])
+        manager.register_all_roles(
+            [
+                PlannerAgent(),
+                ArchitectAgent(),
+                CoderAgent(),
+                TesterAgent(),
+                DebuggerAgent(),
+                ReviewerAgent(),
+            ]
+        )
 
         # Fire pre-orchestration hook
         if self._hook_runner:
             self._hook_runner.fire('pre_orchestration', task_title=task_title)
 
-        logger.info(
-            f'[EngineeringOS] Starting orchestrated execution: "{task_title}"'
-        )
+        logger.info(f'[EngineeringOS] Starting orchestrated execution: "{task_title}"')
 
         # Run the full pipeline through ManagerAgent
         result = manager.run(context)
@@ -606,6 +594,7 @@ class EngineeringOS:
     def _create_error_memory() -> Any:
         try:
             from openhands.memory.error_memory import ErrorMemory
+
             mem = ErrorMemory()
             logger.info('[EngineeringOS] ErrorMemory: ACTIVE')
             return mem
@@ -617,6 +606,7 @@ class EngineeringOS:
     def _create_fix_memory() -> Any:
         try:
             from openhands.memory.fix_memory import FixMemory
+
             mem = FixMemory()
             logger.info('[EngineeringOS] FixMemory: ACTIVE')
             return mem
@@ -628,6 +618,7 @@ class EngineeringOS:
     def _create_decision_memory() -> Any:
         try:
             from openhands.memory.decision_memory import DecisionMemory
+
             mem = DecisionMemory()
             logger.info('[EngineeringOS] DecisionMemory: ACTIVE')
             return mem
@@ -639,6 +630,7 @@ class EngineeringOS:
     def _create_retry_policy() -> Any:
         try:
             from openhands.policy.retry_policy import RetryPolicy
+
             policy = RetryPolicy()
             logger.info('[EngineeringOS] RetryPolicy: ACTIVE')
             return policy
@@ -650,6 +642,7 @@ class EngineeringOS:
     def _create_tool_selector() -> Any:
         try:
             from openhands.policy.tool_selector import ToolSelector
+
             selector = ToolSelector()
             logger.info('[EngineeringOS] ToolSelector: ACTIVE')
             return selector
@@ -661,6 +654,7 @@ class EngineeringOS:
     def _create_execution_trace() -> Any:
         try:
             from openhands.observability.execution_trace import ExecutionTrace
+
             trace = ExecutionTrace()
             logger.info('[EngineeringOS] ExecutionTrace: ACTIVE')
             return trace
@@ -672,6 +666,7 @@ class EngineeringOS:
     def _create_artifact_builder() -> Any:
         try:
             from openhands.observability.artifact_builder import ArtifactBuilder
+
             builder = ArtifactBuilder()
             logger.info('[EngineeringOS] ArtifactBuilder: ACTIVE')
             return builder
@@ -706,6 +701,7 @@ class EngineeringOS:
         """Create repo intelligence subsystem (mandatory gate before PLAN)."""
         try:
             from openhands.repo_intel.indexer import RepoIndexer
+
             indexer = RepoIndexer()
             logger.info('[EngineeringOS] RepoIntel: ACTIVE')
             return indexer
@@ -717,6 +713,7 @@ class EngineeringOS:
     def _create_metrics() -> Any:
         try:
             from openhands.observability.metrics import MetricsCollector
+
             m = MetricsCollector()
             logger.info('[EngineeringOS] Metrics: ACTIVE')
             return m
@@ -728,6 +725,7 @@ class EngineeringOS:
     def _create_log_collector() -> Any:
         try:
             from openhands.observability.log_collector import LogCollector
+
             lc = LogCollector()
             logger.info('[EngineeringOS] LogCollector: ACTIVE')
             return lc
@@ -836,9 +834,7 @@ class EngineeringOS:
         logger.info(f'[EngineeringOS] Phase START: {phase.value} (task={task_id})')
 
     @staticmethod
-    def _log_phase_end(
-        task_id: str, phase: TaskPhase, result: PhaseResult
-    ) -> None:
+    def _log_phase_end(task_id: str, phase: TaskPhase, result: PhaseResult) -> None:
         status = 'OK' if result.success else 'FAIL'
         logger.info(
             f'[EngineeringOS] Phase END: {phase.value} [{status}] '
