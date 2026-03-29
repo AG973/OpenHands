@@ -379,12 +379,9 @@ class TaskRunner:
         # Query ErrorMemory for past errors on this repo/task
         if self._error_memory:
             try:
-                recent_errors = self._error_memory.find_similar(
-                    error_type='',
-                    error_message='',
-                    file_path='',
-                    limit=10,
-                )
+                recent_errors = self._error_memory.get_recurring_errors(
+                    min_count=1,
+                )[:10]
                 task.context.error_memory = [
                     e.to_dict() if hasattr(e, 'to_dict') else str(e)
                     for e in recent_errors
