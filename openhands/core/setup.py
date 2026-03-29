@@ -1,19 +1,17 @@
-# IMPORTANT: LEGACY V0 CODE - Deprecated since version 1.0.0, scheduled for removal April 1, 2026
-# This file is part of the legacy (V0) implementation of OpenHands and will be removed soon as we complete the migration to V1.
-# OpenHands V1 uses the Software Agent SDK for the agentic core and runs a new application server. Please refer to:
-#   - V1 agentic core (SDK): https://github.com/OpenHands/software-agent-sdk
-#   - V1 application server (in this repo): openhands/app_server/
-# Unless you are working on deprecation, please avoid extending this legacy file and consult the V1 codepaths above.
-# Tag: Legacy-V0
+from __future__ import annotations
+
 import hashlib
 import os
 import uuid
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from pydantic import SecretStr
 
 import openhands.agenthub  # noqa F401 (we import this to get the agents registered)
 from openhands.controller import AgentController
+
+if TYPE_CHECKING:
+    from openhands.engineering_os import EngineeringOS
 from openhands.controller.agent import Agent
 from openhands.controller.state.state import State
 from openhands.core.config import (
@@ -247,7 +245,14 @@ def create_controller(
     conversation_stats: ConversationStats,
     headless_mode: bool = True,
     replay_events: list[Event] | None = None,
+    eos: EngineeringOS | None = None,
 ) -> tuple[AgentController, State | None]:
+    """Create an AgentController.
+
+    When `eos` is provided (from EngineeringOS.run_controller_async()),
+    the controller receives it as its parent EOS instead of creating
+    its own — ensuring a single subsystem spine and no circular creation.
+    """
     event_stream = runtime.event_stream
     initial_state = None
     try:
@@ -272,6 +277,7 @@ def create_controller(
         confirmation_mode=config.security.confirmation_mode,
         replay_events=replay_events,
         security_analyzer=runtime.security_analyzer,
+        eos=eos,
     )
     return (controller, initial_state)
 

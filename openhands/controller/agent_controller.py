@@ -152,6 +152,7 @@ class AgentController:
         status_callback: Callable | None = None,
         replay_events: list[Event] | None = None,
         security_analyzer: 'SecurityAnalyzer | None' = None,
+        eos: 'EngineeringOS | None' = None,
     ):
         """Initializes a new instance of the AgentController class.
 
@@ -221,17 +222,25 @@ class AgentController:
 
         # ══════════════════════════════════════════════════════════════════
         # Engineering OS (V1) — primary subsystem spine
-        # All new integration logic flows through EngineeringOS.
-        # Legacy V0 integrations below are kept ONLY as fallback.
+        # When `eos` is provided (from EngineeringOS.run_controller_async()),
+        # we use the PARENT instance instead of creating a new one.
+        # This prevents circular creation and ensures a single subsystem spine.
         # ══════════════════════════════════════════════════════════════════
-        try:
-            self._eos = EngineeringOS()
+        if eos is not None:
+            # Use the parent EOS — canonical path
+            self._eos = eos
             self._eos_available = True
-            self.log('info', 'Engineering OS initialized — V1 subsystems active')
-        except Exception as exc:
-            self._eos = None  # type: ignore[assignment]
-            self._eos_available = False
-            self.log('warning', f'Engineering OS unavailable, falling back to V0: {exc}')
+            self.log('info', 'Engineering OS attached from parent — single spine active')
+        else:
+            # Fallback: create own EOS (legacy callers that don't go through canonical path)
+            try:
+                self._eos = EngineeringOS()
+                self._eos_available = True
+                self.log('info', 'Engineering OS initialized — V1 subsystems active')
+            except Exception as exc:
+                self._eos = None  # type: ignore[assignment]
+                self._eos_available = False
+                self.log('warning', f'Engineering OS unavailable, falling back to V0: {exc}')
 
         # ── V0 Fallback: Tool loop detector (Jaccard similarity) ─────────
         # DEPRECATED_V0: Replaced by EngineeringOS retry_policy + error_memory.

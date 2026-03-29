@@ -115,6 +115,9 @@ optional-dependencies.third_party_runtimes = [
 urls.Homepage = "https://github.com/OpenHands/OpenHands"
 urls.Repository = "https://github.com/OpenHands/OpenHands"
 
+[project.scripts]
+openhands = "openhands.core.main:cli_entry"
+
 [dependency-groups]
 dev = [
   "build",

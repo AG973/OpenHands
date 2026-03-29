@@ -190,6 +190,10 @@ class TaskEngine:
         With failure handling:
         (any phase fails) -> FAILURE_ANALYSIS -> RETRY_OR_FIX -> back to EXECUTE
 
+        Fix #7: REPO_ANALYSIS is a MANDATORY gate before PLAN.
+        If REPO_ANALYSIS fails, the pipeline does NOT proceed to PLAN.
+        This ensures that the planner always has repo intelligence context.
+
         The pipeline exits when the state machine reaches a terminal state.
         """
         # Phase sequence for the happy path
@@ -206,14 +210,43 @@ class TaskEngine:
         ]
 
         phase_idx = 0
+        repo_analysis_passed = False  # Fix #7: track REPO_ANALYSIS gate
 
         while not sm.is_terminal and phase_idx < len(happy_path):
             current_target = happy_path[phase_idx]
+
+            # Fix #7: REPO_ANALYSIS is a mandatory gate before PLAN.
+            # If we're about to enter PLAN but REPO_ANALYSIS didn't pass,
+            # block the pipeline — the planner MUST have repo context.
+            if (
+                current_target == TaskPhase.PLAN
+                and not repo_analysis_passed
+                and task.context.repo_path  # Only enforce if there's a repo
+            ):
+                logger.error(
+                    f'[TaskEngine] PLAN blocked: REPO_ANALYSIS gate not passed '
+                    f'for task {task.task_id}'
+                )
+                task.result.success = False
+                task.result.error = (
+                    'PLAN phase blocked: REPO_ANALYSIS must complete successfully '
+                    'before planning can begin (Fix #7: mandatory gate)'
+                )
+                sm.transition_to(
+                    TaskPhase.FAILED,
+                    success=False,
+                    error=task.result.error,
+                )
+                break
 
             # Skip if we're already past this phase (e.g. after retry)
             if sm.current_phase == current_target:
                 # We're at this phase — execute it
                 result = self._execute_phase(task, sm, current_target)
+
+                # Fix #7: Track REPO_ANALYSIS gate status
+                if current_target == TaskPhase.REPO_ANALYSIS and result.success:
+                    repo_analysis_passed = True
 
                 if result.success:
                     # Move to next phase
