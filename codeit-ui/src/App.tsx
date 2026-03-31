@@ -14,6 +14,7 @@ import {
   Download, Circle, Activity
 } from 'lucide-react'
 import './App.css'
+import * as codeitApi from './services/codeitApi'
 
 // ─── Backend URL configuration ───────────────────────────────────────────────
 // In production (static serve), VITE_BACKEND_URL must point to the backend host.
@@ -399,19 +400,36 @@ function WelcomeHero({ onExampleClick }: { onExampleClick: (text: string) => voi
 
 /* ═══════════════ SKILLS PANEL ═══════════════ */
 function SkillsPanel() {
-  const [skills, setSkills] = useLocalStorage<SkillItem[]>('codeit_skills', [
-    { id: '1', name: 'Code Review', description: 'Reviews code for best practices, security, and bugs', content: 'You are an expert code reviewer. Analyze code for security vulnerabilities, performance issues, style violations, and potential bugs. Suggest improvements with code examples.', enabled: true },
-    { id: '2', name: 'Debug Assistant', description: 'Identifies and fixes bugs in code', content: 'You are a debugging expert. Help reproduce issues, identify root causes using systematic analysis, and suggest targeted fixes with minimal side effects.', enabled: true },
-    { id: '3', name: 'Project Setup', description: 'Sets up new projects with best practices', content: 'You are a project setup specialist. Use modern frameworks, configure linting, testing, CI/CD pipelines, and follow community best practices for project structure.', enabled: false },
-    { id: '4', name: 'API Builder', description: 'Designs and builds REST/GraphQL APIs', content: 'You are an API design expert. Follow REST conventions, implement proper authentication, input validation, error handling, and generate API documentation.', enabled: true },
-  ])
+  const [skills, setSkills] = useState<SkillItem[]>([])
   const [editing, setEditing] = useState<SkillItem | null>(null)
   const [showForm, setShowForm] = useState(false)
+  const [loading, setLoading] = useState(true)
 
-  function toggle(id: string) { setSkills(p => p.map(s => s.id === id ? { ...s, enabled: !s.enabled } : s)) }
-  function remove(id: string) { setSkills(p => p.filter(s => s.id !== id)) }
+  useEffect(() => {
+    codeitApi.listSkills().then(items => { setSkills(items); setLoading(false) }).catch(() => setLoading(false))
+  }, [])
+
+  function toggle(id: string) {
+    const sk = skills.find(s => s.id === id)
+    if (!sk) return
+    codeitApi.updateSkill(id, { enabled: !sk.enabled }).then(updated => {
+      setSkills(p => p.map(s => s.id === id ? { ...s, enabled: updated.enabled } : s))
+    }).catch(err => emitLog('error', 'skills', `Toggle failed: ${err.message}`))
+  }
+  function remove(id: string) {
+    codeitApi.deleteSkill(id).then(() => setSkills(p => p.filter(s => s.id !== id)))
+      .catch(err => emitLog('error', 'skills', `Delete failed: ${err.message}`))
+  }
   function saveSkill(s: SkillItem) {
-    if (s.id) { setSkills(p => p.map(x => x.id === s.id ? s : x)) } else { setSkills(p => [...p, { ...s, id: String(Date.now()) }]) }
+    if (s.id) {
+      codeitApi.updateSkill(s.id, s).then(updated => {
+        setSkills(p => p.map(x => x.id === s.id ? { ...x, ...updated } : x))
+      }).catch(err => emitLog('error', 'skills', `Update failed: ${err.message}`))
+    } else {
+      codeitApi.createSkill({ name: s.name, description: s.description, content: s.content, enabled: s.enabled }).then(created => {
+        setSkills(p => [...p, created])
+      }).catch(err => emitLog('error', 'skills', `Create failed: ${err.message}`))
+    }
     setShowForm(false); setEditing(null)
   }
 
@@ -468,23 +486,36 @@ function SkillsPanel() {
 
 /* ═══════════════ KNOWLEDGE PANEL ═══════════════ */
 function KnowledgePanel() {
-  const [items, setItems] = useLocalStorage<KnowledgeItem[]>('codeit_knowledge', [
-    { id: '1', title: 'Project Architecture', content: 'Frontend: React + Vite + Tailwind CSS. Backend: Python FastAPI with OpenHands agent framework. LLM: Local Ollama with GLM-4.7-flash. Deployment: Docker containers with Nginx reverse proxy.', tags: ['architecture', 'system'], updated_at: '2024-03-20' },
-    { id: '2', title: 'Deployment Guide', content: '1. Build frontend with npm run build\n2. Deploy via Docker compose\n3. Configure Ollama endpoint\n4. Set environment variables\n5. Run docker-compose up -d', tags: ['deployment', 'ops'], updated_at: '2024-03-19' },
-    { id: '3', title: 'Coding Standards', content: 'TypeScript strict mode enabled. ESLint + Prettier for formatting. Conventional commits required. PR reviews mandatory. Unit tests for all new features. Integration tests for API endpoints.', tags: ['standards', 'quality'], updated_at: '2024-03-18' },
-  ])
+  const [items, setItems] = useState<KnowledgeItem[]>([])
   const [editing, setEditing] = useState<KnowledgeItem | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [query, setQuery] = useState('')
+  const [loading, setLoading] = useState(true)
 
-  const filtered = items.filter(i => i.title.toLowerCase().includes(query.toLowerCase()) || i.tags.some(t => t.toLowerCase().includes(query.toLowerCase())) || i.content.toLowerCase().includes(query.toLowerCase()))
+  useEffect(() => {
+    codeitApi.listKnowledge().then(data => { setItems(data); setLoading(false) }).catch(() => setLoading(false))
+  }, [])
+
+  const filtered = query
+    ? items.filter(i => i.title.toLowerCase().includes(query.toLowerCase()) || i.tags.some(t => t.toLowerCase().includes(query.toLowerCase())) || i.content.toLowerCase().includes(query.toLowerCase()))
+    : items
 
   function saveItem(item: KnowledgeItem) {
-    const now = new Date().toISOString().split('T')[0]
-    if (item.id) { setItems(p => p.map(i => i.id === item.id ? { ...item, updated_at: now } : i)) } else { setItems(p => [...p, { ...item, id: String(Date.now()), updated_at: now }]) }
+    if (item.id) {
+      codeitApi.updateKnowledge(item.id, { title: item.title, content: item.content, tags: item.tags }).then(updated => {
+        setItems(p => p.map(i => i.id === item.id ? { ...i, ...updated } : i))
+      }).catch(err => emitLog('error', 'knowledge', `Update failed: ${err.message}`))
+    } else {
+      codeitApi.createKnowledge({ title: item.title, content: item.content, tags: item.tags }).then(created => {
+        setItems(p => [...p, created])
+      }).catch(err => emitLog('error', 'knowledge', `Create failed: ${err.message}`))
+    }
     setShowForm(false); setEditing(null)
   }
-  function remove(id: string) { setItems(p => p.filter(i => i.id !== id)) }
+  function remove(id: string) {
+    codeitApi.deleteKnowledge(id).then(() => setItems(p => p.filter(i => i.id !== id)))
+      .catch(err => emitLog('error', 'knowledge', `Delete failed: ${err.message}`))
+  }
 
   return (
     <div className="h-full flex flex-col">
@@ -548,20 +579,36 @@ function KnowledgePanel() {
 
 /* ═══════════════ PROMPTS PANEL ═══════════════ */
 function PromptsPanel() {
-  const [prompts, setPrompts] = useLocalStorage<PromptItem[]>('codeit_prompts', [
-    { id: '1', name: 'Default System Prompt', content: 'You are a helpful AI coding assistant powered by CODEIT. You can write code, create files, run commands, build applications, and deploy them to servers. Always explain your approach before acting.', active: true },
-    { id: '2', name: 'Strict Code Quality', content: 'Follow strict coding standards: TypeScript strict mode, comprehensive error handling, unit tests for all functions, meaningful variable names, JSDoc comments, and SOLID principles.', active: false },
-    { id: '3', name: 'Non-Developer Friendly', content: 'You are helping a non-technical user. Use simple language, avoid jargon, explain every concept in plain terms. Provide step-by-step instructions that anyone can follow without technical knowledge.', active: false },
-  ])
+  const [prompts, setPrompts] = useState<PromptItem[]>([])
   const [editing, setEditing] = useState<PromptItem | null>(null)
   const [showForm, setShowForm] = useState(false)
+  const [loading, setLoading] = useState(true)
 
-  function setActive(id: string) { setPrompts(p => p.map(x => ({ ...x, active: x.id === id }))) }
+  useEffect(() => {
+    codeitApi.listPrompts().then(data => { setPrompts(data); setLoading(false) }).catch(() => setLoading(false))
+  }, [])
+
+  function setActive(id: string) {
+    codeitApi.activatePrompt(id).then(() => {
+      setPrompts(p => p.map(x => ({ ...x, active: x.id === id })))
+    }).catch(err => emitLog('error', 'prompts', `Activate failed: ${err.message}`))
+  }
   function savePrompt(prompt: PromptItem) {
-    if (prompt.id) { setPrompts(p => p.map(x => x.id === prompt.id ? prompt : x)) } else { setPrompts(p => [...p, { ...prompt, id: String(Date.now()) }]) }
+    if (prompt.id) {
+      codeitApi.updatePrompt(prompt.id, { name: prompt.name, content: prompt.content, active: prompt.active }).then(updated => {
+        setPrompts(p => p.map(x => x.id === prompt.id ? { ...x, ...updated } : x))
+      }).catch(err => emitLog('error', 'prompts', `Update failed: ${err.message}`))
+    } else {
+      codeitApi.createPrompt({ name: prompt.name, content: prompt.content, active: prompt.active }).then(created => {
+        setPrompts(p => [...p, created])
+      }).catch(err => emitLog('error', 'prompts', `Create failed: ${err.message}`))
+    }
     setShowForm(false); setEditing(null)
   }
-  function remove(id: string) { setPrompts(p => p.filter(x => x.id !== id)) }
+  function remove(id: string) {
+    codeitApi.deletePrompt(id).then(() => setPrompts(p => p.filter(x => x.id !== id)))
+      .catch(err => emitLog('error', 'prompts', `Delete failed: ${err.message}`))
+  }
 
   return (
     <div className="h-full flex flex-col">
@@ -614,17 +661,32 @@ function PromptsPanel() {
 
 /* ═══════════════ CONNECTORS PANEL ═══════════════ */
 function ConnectorsPanel() {
-  const [connectors, setConnectors] = useLocalStorage<ConnectorItem[]>('codeit_connectors', [
-    { id: '1', name: 'GitHub', type: 'github', icon: 'github', status: 'disconnected', config: { token: '', org: '', default_branch: 'main' } },
-    { id: '2', name: 'Discord', type: 'discord', icon: 'discord', status: 'disconnected', config: { bot_token: '', server_id: '', channel_id: '' } },
-    { id: '3', name: 'AWS', type: 'aws', icon: 'aws', status: 'disconnected', config: { access_key: '', secret_key: '', region: 'us-east-1' } },
-    { id: '4', name: 'RunPod', type: 'runpod', icon: 'runpod', status: 'disconnected', config: { api_key: '', gpu_type: 'RTX 4090' } },
-    { id: '5', name: 'Custom Server', type: 'server', icon: 'server', status: 'disconnected', config: { host: '', port: '22', username: '', ssh_key: '' } },
-  ], true)
+  const [connectors, setConnectors] = useState<ConnectorItem[]>([])
   const [editing, setEditing] = useState<ConnectorItem | null>(null)
   const [validating, setValidating] = useState(false)
   const [validationMsg, setValidationMsg] = useState<string | null>(null)
   const [validationOk, setValidationOk] = useState(false)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    codeitApi.listConnectors().then(data => {
+      // If empty, seed default connectors
+      if (data.length === 0) {
+        const defaults = [
+          { name: 'GitHub', type: 'github', icon: 'github', config: { token: '', org: '', default_branch: 'main' } },
+          { name: 'Discord', type: 'discord', icon: 'discord', config: { bot_token: '', server_id: '', channel_id: '' } },
+          { name: 'AWS', type: 'aws', icon: 'aws', config: { access_key: '', secret_key: '', region: 'us-east-1' } },
+          { name: 'RunPod', type: 'runpod', icon: 'runpod', config: { api_key: '', gpu_type: 'RTX 4090' } },
+          { name: 'Custom Server', type: 'server', icon: 'server', config: { host: '', port: '22', username: '', ssh_key: '' } },
+        ]
+        Promise.all(defaults.map(d => codeitApi.createConnector(d))).then(() => {
+          codeitApi.listConnectors().then(seeded => { setConnectors(seeded); setLoading(false) })
+        }).catch(() => setLoading(false))
+      } else {
+        setConnectors(data); setLoading(false)
+      }
+    }).catch(() => setLoading(false))
+  }, [])
 
   const iconMap: Record<string, React.ReactNode> = {
     github: <Github className="w-5 h-5" />, discord: <MessageCircle className="w-5 h-5" />,
@@ -686,6 +748,8 @@ function ConnectorsPanel() {
       const result = await validateConnector(c)
       if (!result.ok) { setValidationMsg(result.msg); setValidationOk(false); setValidating(false); return }
       setValidationMsg(result.msg); setValidationOk(true)
+      // Persist to backend
+      await codeitApi.updateConnector(c.id, { status: 'connected', config: c.config })
       setConnectors(p => p.map(x => x.id === c.id ? { ...c, status: 'connected' } : x))
       emitLog('info', 'connectors', `${c.name} connected successfully`)
       setTimeout(() => { setEditing(null); setValidationMsg(null) }, 1500)
@@ -696,8 +760,10 @@ function ConnectorsPanel() {
     setValidating(false)
   }
   function disconnect(id: string) {
-    setConnectors(p => p.map(c => c.id === id ? { ...c, status: 'disconnected', config: Object.fromEntries(Object.keys(c.config).map(k => [k, ''])) } : c))
-    emitLog('info', 'connectors', `Disconnected connector ${id}`)
+    codeitApi.disconnectConnector(id).then(() => {
+      setConnectors(p => p.map(c => c.id === id ? { ...c, status: 'disconnected', config: Object.fromEntries(Object.keys(c.config).map(k => [k, ''])) } : c))
+      emitLog('info', 'connectors', `Disconnected connector ${id}`)
+    }).catch(err => emitLog('error', 'connectors', `Disconnect failed: ${err.message}`))
   }
 
   return (
@@ -876,10 +942,22 @@ function DeployPanel({ onDeploy }: { onDeploy?: (msg: string) => void }) {
     { id: 'custom', name: 'Custom Server', desc: 'Deploy via SSH to any remote server', icon: <Globe className="w-5 h-5" />, status: 'needs_config' as const, cmd: 'Deploy my app to my custom server via SSH' },
   ]
   const [deploying, setDeploying] = useState<string | null>(null)
+  const [jobs, setJobs] = useState<Array<{ id: string; target: string; status: string; created_at?: string }>>([])
+
+  useEffect(() => {
+    codeitApi.listDeployJobs().then(data => setJobs(data)).catch(() => {})
+  }, [])
+
   function handleDeploy(t: typeof targets[0]) {
     setDeploying(t.id)
+    // Create real backend deploy job
+    codeitApi.createDeployJob(t.id, {}).then(job => {
+      setJobs(prev => [job, ...prev])
+      emitLog('info', 'deploy', `Deploy job created: ${job.id} (${t.name})`)
+    }).catch(err => {
+      emitLog('error', 'deploy', `Deploy failed: ${err.message}`)
+    })
     if (onDeploy) onDeploy(t.cmd)
-    emitLog('info', 'deploy', `Deploy requested: ${t.name}`)
     setTimeout(() => setDeploying(null), 2000)
   }
   return (

@@ -44,6 +44,9 @@ from openhands.server.shared import conversation_manager, server_config
 from openhands.server.types import AppMode
 from openhands.version import get_version
 
+# CODEIT custom backend
+from openhands.server.codeit.router import get_codeit_routers
+
 mcp_app = mcp_server.http_app(path='/mcp', stateless_http=True)
 
 
@@ -102,3 +105,7 @@ if server_config.enable_v1:
     app.include_router(v1_router.router)
 app.include_router(trajectory_router)
 add_health_endpoints(app)
+
+# CODEIT custom feature routes (skills, knowledge, prompts, connectors, deploy, uploads, auth, health)
+for _codeit_router in get_codeit_routers():
+    app.include_router(_codeit_router)
