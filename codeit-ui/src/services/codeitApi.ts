@@ -3,7 +3,7 @@
  * All custom feature CRUD goes through these functions.
  */
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || ''
+const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || '').replace(/\/+$/, '')
 
 // ─── Auth Token Management ──────────────────────────────────────────────────
 

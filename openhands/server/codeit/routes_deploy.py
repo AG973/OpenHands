@@ -1,6 +1,7 @@
 """CODEIT Deploy Jobs routes — real backend-tracked deployment workflows."""
 
 import json
+import re
 import subprocess
 import threading
 import uuid
@@ -87,29 +88,60 @@ def _run_deploy_job(job_id: str, target: str, config: dict) -> None:
             )
 
 
-def _run_docker_deploy(job_id: str, config: dict) -> None:
-    """Build and run Docker container."""
-    workspace = config.get("workspace", "/root/workspace")
-    dockerfile = config.get("dockerfile", "Dockerfile")
-    image_name = config.get("image_name", f"codeit-deploy-{job_id[:8]}")
-    port = config.get("port", "8000")
+# Strict validation for deploy config values — prevents command injection
+_SAFE_PATH_RE = re.compile(r'^[a-zA-Z0-9_./ -]+$')
+_SAFE_NAME_RE = re.compile(r'^[a-zA-Z0-9_.-]+$')
+_SAFE_PORT_RE = re.compile(r'^[0-9]{1,5}$')
 
-    commands = [
-        f"cd {workspace} && docker build -t {image_name} -f {dockerfile} .",
-        f"docker run -d --name {image_name} -p {port}:{port} {image_name}",
+
+def _validate_path(value: str, field: str) -> str:
+    if not _SAFE_PATH_RE.match(value):
+        raise ValueError(f"Invalid characters in {field}: {value!r}")
+    if '..' in value:
+        raise ValueError(f"Path traversal not allowed in {field}")
+    return value
+
+
+def _validate_name(value: str, field: str) -> str:
+    if not _SAFE_NAME_RE.match(value):
+        raise ValueError(f"Invalid characters in {field}: {value!r}")
+    return value
+
+
+def _validate_port(value: str) -> str:
+    if not _SAFE_PORT_RE.match(value):
+        raise ValueError(f"Invalid port: {value!r}")
+    port_int = int(value)
+    if port_int < 1 or port_int > 65535:
+        raise ValueError(f"Port out of range: {port_int}")
+    return value
+
+
+def _run_docker_deploy(job_id: str, config: dict) -> None:
+    """Build and run Docker container. Uses subprocess with argument lists (no shell=True)."""
+    workspace = _validate_path(config.get("workspace", "/root/workspace"), "workspace")
+    dockerfile = _validate_name(config.get("dockerfile", "Dockerfile"), "dockerfile")
+    image_name = _validate_name(config.get("image_name", f"codeit-deploy-{job_id[:8]}"), "image_name")
+    port = _validate_port(config.get("port", "8000"))
+
+    # Use argument lists instead of shell=True to prevent injection
+    command_sets = [
+        (["docker", "build", "-t", image_name, "-f", dockerfile, "."], workspace),
+        (["docker", "run", "-d", "--name", image_name, "-p", f"{port}:{port}", image_name], None),
     ]
 
     with get_db() as conn:
-        for cmd in commands:
+        for cmd_args, cwd in command_sets:
+            cmd_display = " ".join(cmd_args)
             conn.execute(
                 "UPDATE deploy_jobs SET logs = logs || ?, updated_at = datetime('now') WHERE id = ?",
-                (f"$ {cmd}\n", job_id),
+                (f"$ {cmd_display}\n", job_id),
             )
             conn.commit()
 
             try:
                 result = subprocess.run(
-                    cmd, shell=True, capture_output=True, text=True, timeout=300
+                    cmd_args, cwd=cwd, capture_output=True, text=True, timeout=300
                 )
                 output = result.stdout + result.stderr
                 conn.execute(
@@ -138,9 +170,9 @@ def _run_docker_deploy(job_id: str, config: dict) -> None:
 
 
 def _run_local_deploy(job_id: str, config: dict) -> None:
-    """Run local deployment (copy files, restart service)."""
-    workspace = config.get("workspace", "/root/workspace")
-    deploy_dir = config.get("deploy_dir", "/var/www/app")
+    """Run local deployment (copy files, restart service). Uses argument lists (no shell=True)."""
+    workspace = _validate_path(config.get("workspace", "/root/workspace"), "workspace")
+    deploy_dir = _validate_path(config.get("deploy_dir", "/var/www/app"), "deploy_dir")
 
     with get_db() as conn:
         log_line = f"[INFO] Local deploy from {workspace} to {deploy_dir}\n"
@@ -151,9 +183,10 @@ def _run_local_deploy(job_id: str, config: dict) -> None:
         conn.commit()
 
         try:
-            cmd = f"rsync -av --delete {workspace}/ {deploy_dir}/"
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120)
-            output = f"$ {cmd}\n{result.stdout}{result.stderr}\n"
+            cmd_args = ["rsync", "-av", "--delete", f"{workspace}/", f"{deploy_dir}/"]
+            cmd_display = " ".join(cmd_args)
+            result = subprocess.run(cmd_args, capture_output=True, text=True, timeout=120)
+            output = f"$ {cmd_display}\n{result.stdout}{result.stderr}\n"
             conn.execute(
                 "UPDATE deploy_jobs SET logs = logs || ?, updated_at = datetime('now') WHERE id = ?",
                 (output, job_id),
