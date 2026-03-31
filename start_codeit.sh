@@ -1,17 +1,33 @@
 #!/bin/bash
 # =========================================
 #  CODEIT - Full Auto Setup & Start
-#  Usage: bash /home/codeit/OpenHands/start_codeit.sh
+#  Usage: bash start_codeit.sh
+#  (run from the OpenHands repo root, or it auto-detects)
 # =========================================
 
-OHDIR="/home/codeit/OpenHands"
+# Auto-detect install directory (where this script lives)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OHDIR="${CODEIT_HOME:-$SCRIPT_DIR}"
 UIDIR="$OHDIR/codeit-ui"
-BACKEND_PORT=3000
-FRONTEND_PORT=8080
-WORKSPACE="/home/codeit/workspace"
+BACKEND_PORT="${CODEIT_BACKEND_PORT:-3000}"
+FRONTEND_PORT="${CODEIT_FRONTEND_PORT:-8080}"
+WORKSPACE="${CODEIT_WORKSPACE:-$HOME/workspace}"
 LOG_BACKEND="/tmp/openhands.log"
 LOG_FRONTEND="/tmp/codeit-ui.log"
 RUNTIME_IMAGE="ghcr.io/all-hands-ai/runtime:0.38-nikolaik"
+
+# Auto-detect host IP for display (Tailscale > LAN > localhost)
+HOST_IP="localhost"
+if command -v tailscale >/dev/null 2>&1; then
+  TS_IP=$(tailscale ip -4 2>/dev/null || true)
+  [ -n "$TS_IP" ] && HOST_IP="$TS_IP"
+fi
+if [ "$HOST_IP" = "localhost" ] && command -v hostname >/dev/null 2>&1; then
+  LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+  [ -n "$LAN_IP" ] && HOST_IP="$LAN_IP"
+fi
+# Allow override via env var
+HOST_IP="${CODEIT_HOST_IP:-$HOST_IP}"
 
 echo "========================================="
 echo "  CODEIT - Full Auto Setup & Start"
@@ -93,9 +109,9 @@ echo "[6/7] Checking config..."
 mkdir -p "$WORKSPACE"
 if [ ! -f "$OHDIR/config.toml" ]; then
   echo "  Creating config.toml..."
-  cat > "$OHDIR/config.toml" << 'EOF'
+  cat > "$OHDIR/config.toml" << EOF
 [core]
-workspace_base = "/home/codeit/workspace"
+workspace_base = "$WORKSPACE"
 run_as_openhands = true
 
 [llm]
@@ -157,8 +173,8 @@ echo ""
 echo "========================================="
 echo "  CODEIT is running!"
 echo "========================================="
-echo "  Frontend: http://100.96.97.90:$FRONTEND_PORT"
-echo "  Backend:  http://100.96.97.90:$BACKEND_PORT"
+echo "  Frontend: http://$HOST_IP:$FRONTEND_PORT"
+echo "  Backend:  http://$HOST_IP:$BACKEND_PORT"
 echo ""
 echo "  Backend logs:  tail -f $LOG_BACKEND"
 echo "  Frontend logs: tail -f $LOG_FRONTEND"
