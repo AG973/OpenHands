@@ -1,0 +1,1040 @@
+=== REASONING (483 chars) ===
+The user wants me to build a complete real estate marketplace backend with FastAPI and SQLAlchemy. I need to create 5 files with complete, runnable code:
+
+1. backend/models.py - SQLAlchemy models with 10 tables
+2. backend/main.py - FastAPI app with CRUD routes
+3. backend/auth.py - JWT authentication with RBAC
+4. backend/schemas.py - Pydantic schemas
+5. requirements.txt - Dependencies
+
+Let me start by creating the backend/models.py file with all 10 tables and their relationships.
+
+=== RESPONSE (33637 chars) ===
+I'll create a complete real estate marketplace backend with all the required files. Let me start with the models.
+
+<str_replace_editor>
+<command>create</command>
+<path>/workspace/backend/models.py</path>
+<file_text>
+"""
+SQLAlchemy models for Real Estate Marketplace
+"""
+from datetime import datetime
+from sqlalchemy import create_engine, Column, Integer, String, Text, Float, Boolean, DateTime, ForeignKey, Enum, Table
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import relationship, sessionmaker
+import enum
+
+Base = declarative_base()
+
+# Association table for property features (many-to-many)
+property_features_association = Table(
+    'property_features_link',
+    Base.metadata,
+    Column('property_id', Integer, ForeignKey('properties.id', ondelete='CASCADE'), primary_key=True),
+    Column('feature_id', Integer, ForeignKey('property_features.id', ondelete='CASCADE'), primary_key=True)
+)
+
+
+class UserRole(enum.Enum):
+    BUYER = "buyer"
+    SELLER = "seller"
+    AGENT = "agent"
+    ADMIN = "admin"
+
+
+class PropertyStatus(enum.Enum):
+    DRAFT = "draft"
+    PENDING = "pending"
+    ACTIVE = "active"
+    SOLD = "sold"
+    RENTED = "rented"
+    WITHDRAWN = "withdrawn"
+
+
+class PropertyType(enum.Enum):
+    HOUSE = "house"
+    APARTMENT = "apartment"
+    CONDO = "condo"
+    TOWNHOUSE = "townhouse"
+    LAND = "land"
+    COMMERCIAL = "commercial"
+    VILLA = "villa"
+
+
+class InquiryStatus(enum.Enum):
+    NEW = "new"
+    READ = "read"
+    RESPONDED = "responded"
+    CLOSED = "closed"
+
+
+class User(Base):
+    """User model for all platform users"""
+    __tablename__ = 'users'
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    hashed_password = Column(String(255), nullable=False)
+    first_name = Column(String(100), nullable=False)
+    last_name = Column(String(100), nullable=False)
+    phone = Column(String(20), nullable=True)
+    role = Column(Enum(UserRole), default=UserRole.BUYER, nullable=False)
+    is_active = Column(Boolean, default=True)
+    is_verified = Column(Boolean, default=False)
+    avatar_url = Column(String(500), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_login = Column(DateTime, nullable=True)
+
+    # Relationships
+    properties = relationship("Property", back_populates="owner", cascade="all, delete-orphan")
+    favorites = relationship("Favorite", back_populates="user", cascade="all, delete-orphan")
+    inquiries_sent = relationship("Inquiry", foreign_keys="Inquiry.sender_id", back_populates="sender", cascade="all, delete-orphan")
+    inquiries_received = relationship("Inquiry", foreign_keys="Inquiry.receiver_id", back_populates="receiver", cascade="all, delete-orphan")
+    reviews_given = relationship("Review", foreign_keys="Review.reviewer_id", back_populates="reviewer", cascade="all, delete-orphan")
+    reviews_received = relationship("Review", foreign_keys="Review.reviewed_user_id", back_populates="reviewed_user", cascade="all, delete-orphan")
+    agent_profile = relationship("AgentProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    agency = relationship("Agency", back_populates="owner", uselist=False, cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<User(id={self.id}, email='{self.email}', role={self.role.value})>"
+
+
+class Agency(Base):
+    """Real estate agency model"""
+    __tablename__ = 'agencies'
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    logo_url = Column(String(500), nullable=True)
+    website = Column(String(255), nullable=True)
+    email = Column(String(255), nullable=True)
+    phone = Column(String(20), nullable=True)
+    license_number = Column(String(50), nullable=True)
+    owner_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=True)
+    rating = Column(Float, default=0.0)
+    total_reviews = Column(Integer, default=0)
+    is_verified = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    owner = relationship("User", back_populates="agency")
+    agents = relationship("AgentProfile", back_populates="agency", cascade="all, delete-orphan")
+    properties = relationship("Property", back_populates="agency", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<Agency(id={self.id}, name='{self.name}')>"
+
+
+class AgentProfile(Base):
+    """Extended profile for agents"""
+    __tablename__ = 'agent_profiles'
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), unique=True, nullable=False)
+    agency_id = Column(Integer, ForeignKey('agencies.id', ondelete='SET NULL'), nullable=True)
+    license_number = Column(String(50), nullable=True)
+    bio = Column(Text, nullable=True)
+    experience_years = Column(Integer, default=0)
+    specializations = Column(String(500), nullable=True)  # JSON string or comma-separated
+    languages = Column(String(255), nullable=True)  # JSON string or comma-separated
+    service_areas = Column(String(500), nullable=True)  # JSON string or comma-separated
+    rating = Column(Float, default=0.0)
+    total_reviews = Column(Integer, default=0)
+    total_sales = Column(Integer, default=0)
+    total_rentals = Column(Integer, default=0)
+    is_verified = Column(Boolean, default=False)
+    is_featured = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User", back_populates="agent_profile")
+    agency = relationship("Agency", back_populates="agents")
+    listed_properties = relationship("Property", back_populates="agent", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<AgentProfile(id={self.id}, user_id={self.user_id})>"
+
+
+class Address(Base):
+    """Address model for properties"""
+    __tablename__ = 'addresses'
+
+    id = Column(Integer, primary_key=True, index=True)
+    property_id = Column(Integer, ForeignKey('properties.id', ondelete='CASCADE'), unique=True, nullable=False)
+    street_address = Column(String(255), nullable=False)
+    street_address_2 = Column(String(255), nullable=True)
+    city = Column(String(100), nullable=False)
+    state = Column(String(100), nullable=False)
+    postal_code = Column(String(20), nullable=False)
+    country = Column(String(100), default='United States')
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    formatted_address = Column(String(500), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    property = relationship("Property", back_populates="address", uselist=False)
+
+    def __repr__(self):
+        return f"<Address(id={self.id}, city='{self.city}', state='{self.state}')>"
+
+
+class Property(Base):
+    """Property listing model"""
+    __tablename__ = 'properties'
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    property_type = Column(Enum(PropertyType), nullable=False)
+    status = Column(Enum(PropertyStatus), default=PropertyStatus.DRAFT)
+    
+    # Pricing
+    price = Column(Float, nullable=False)
+    price_per_sqft = Column(Float, nullable=True)
+    price_type = Column(String(20), default='sale')  # sale, rent, lease
+    
+    # Property details
+    bedrooms = Column(Integer, default=0)
+    bathrooms = Column(Float, default=0)
+    half_bathrooms = Column(Integer, default=0)
+    square_feet = Column(Integer, nullable=True)
+    lot_size = Column(Float, nullable=True)  # in square feet
+    year_built = Column(Integer, nullable=True)
+    
+    # Additional info
+    parking_spaces = Column(Integer, default=0)
+    garage_spaces = Column(Integer, default=0)
+    stories = Column(Integer, default=1)
+    hoa_fee = Column(Float, default=0)
+    tax_amount = Column(Float, nullable=True)
+    
+    # Flags
+    is_featured = Column(Boolean, default=False)
+    is_new_construction = Column(Boolean, default=False)
+    is_foreclosure = Column(Boolean, default=False)
+    
+    # Statistics
+    view_count = Column(Integer, default=0)
+    favorite_count = Column(Integer, default=0)
+    inquiry_count = Column(Integer, default=0)
+    
+    # Foreign keys
+    owner_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    agent_id = Column(Integer, ForeignKey('agent_profiles.id', ondelete='SET NULL'), nullable=True)
+    agency_id = Column(Integer, ForeignKey('agencies.id', ondelete='SET NULL'), nullable=True)
+    
+    # Timestamps
+    listed_at = Column(DateTime, nullable=True)
+    sold_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    owner = relationship("User", back_populates="properties")
+    agent = relationship("AgentProfile", back_populates="listed_properties")
+    agency = relationship("Agency", back_populates="properties")
+    address = relationship("Address", back_populates="property", uselist=False, cascade="all, delete-orphan")
+    images = relationship("PropertyImage", back_populates="property", cascade="all, delete-orphan", order_by="PropertyImage.is_primary.desc(), PropertyImage.order")
+    features = relationship("PropertyFeature", secondary=property_features_association, back_populates="properties")
+    favorites = relationship("Favorite", back_populates="property", cascade="all, delete-orphan")
+    inquiries = relationship("Inquiry", back_populates="property", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<Property(id={self.id}, title='{self.title}', price={self.price})>"
+
+
+class PropertyImage(Base):
+    """Property image model"""
+    __tablename__ = 'property_images'
+
+    id = Column(Integer, primary_key=True, index=True)
+    property_id = Column(Integer, ForeignKey('properties.id', ondelete='CASCADE'), nullable=False)
+    image_url = Column(String(500), nullable=False)
+    thumbnail_url = Column(String(500), nullable=True)
+    caption = Column(String(255), nullable=True)
+    is_primary = Column(Boolean, default=False)
+    order = Column(Integer, default=0)
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+    file_size = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    property = relationship("Property", back_populates="images")
+
+    def __repr__(self):
+        return f"<PropertyImage(id={self.id}, property_id={self.property_id}, is_primary={self.is_primary})>"
+
+
+class PropertyFeature(Base):
+    """Property feature/amenity model"""
+    __tablename__ = 'property_features'
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), unique=True, nullable=False)
+    category = Column(String(50), nullable=True)  # e.g., 'interior', 'exterior', 'community'
+    icon = Column(String(50), nullable=True)
+    description = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    properties = relationship("Property", secondary=property_features_association, back_populates="features")
+
+    def __repr__(self):
+        return f"<PropertyFeature(id={self.id}, name='{self.name}')>"
+
+
+class Favorite(Base):
+    """User favorites/bookmarks for properties"""
+    __tablename__ = 'favorites'
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    property_id = Column(Integer, ForeignKey('properties.id', ondelete='CASCADE'), nullable=False)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User", back_populates="favorites")
+    property = relationship("Property", back_populates="favorites")
+
+    # Unique constraint
+    __table_args__ = (
+        # UniqueConstraint('user_id', 'property_id', name='unique_user_property_favorite'),
+    )
+
+    def __repr__(self):
+        return f"<Favorite(id={self.id}, user_id={self.user_id}, property_id={self.property_id})>"
+
+
+class Inquiry(Base):
+    """Property inquiry/contact request model"""
+    __tablename__ = 'inquiries'
+
+    id = Column(Integer, primary_key=True, index=True)
+    property_id = Column(Integer, ForeignKey('properties.id', ondelete='CASCADE'), nullable=True)
+    sender_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    receiver_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    subject = Column(String(255), nullable=False)
+    message = Column(Text, nullable=False)
+    status = Column(Enum(InquiryStatus), default=InquiryStatus.NEW)
+    response = Column(Text, nullable=True)
+    responded_at = Column(DateTime, nullable=True)
+    contact_phone = Column(String(20), nullable=True)
+    contact_email = Column(String(255), nullable=True)
+    preferred_contact_method = Column(String(20), default='email')  # email, phone, text
+    is_property_inquiry = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    property = relationship("Property", back_populates="inquiries")
+    sender = relationship("User", foreign_keys=[sender_id], back_populates="inquiries_sent")
+    receiver = relationship("User", foreign_keys=[receiver_id], back_populates="inquiries_received")
+
+    def __repr__(self):
+        return f"<Inquiry(id={self.id}, subject='{self.subject}', status={self.status.value})>"
+
+
+class Review(Base):
+    """User/Agent review model"""
+    __tablename__ = 'reviews'
+
+    id = Column(Integer, primary_key=True, index=True)
+    reviewer_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    reviewed_user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    rating = Column(Integer, nullable=False)  # 1-5 stars
+    title = Column(String(255), nullable=True)
+    comment = Column(Text, nullable=True)
+    is_verified_transaction = Column(Boolean, default=False)
+    is_approved = Column(Boolean, default=True)
+    helpful_count = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    reviewer = relationship("User", foreign_keys=[reviewer_id], back_populates="reviews_given")
+    reviewed_user = relationship("User", foreign_keys=[reviewed_user_id], back_populates="reviews_received")
+
+    def __repr__(self):
+        return f"<Review(id={self.id}, rating={self.rating}, reviewer_id={self.reviewer_id})>"
+
+
+# Database engine and session factory
+def get_engine(database_url: str = "sqlite:///./realestate.db"):
+    """Create database engine"""
+    return create_engine(database_url, echo=False)
+
+
+def get_session_maker(engine):
+    """Create session maker"""
+    return sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+def init_db(engine):
+    """Initialize database tables"""
+    Base.metadata.create_all(bind=engine)
+
+
+def get_db():
+    """Dependency for getting database session"""
+    from sqlalchemy.orm import Session
+    engine = get_engine()
+    SessionLocal = get_session_maker(engine)
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+</file_text>
+</str_replace_editor>
+
+Now let me create the schemas file:
+
+<str_replace_editor>
+<command>create</command>
+<path>/workspace/backend/schemas.py</path>
+<file_text>
+"""
+Pydantic schemas for Real Estate Marketplace API
+"""
+from datetime import datetime
+from typing import List, Optional
+from pydantic import BaseModel, EmailStr, Field, validator
+from enum import Enum
+
+
+# Enums for schemas
+class UserRoleEnum(str, Enum):
+    BUYER = "buyer"
+    SELLER = "seller"
+    AGENT = "agent"
+    ADMIN = "admin"
+
+
+class PropertyStatusEnum(str, Enum):
+    DRAFT = "draft"
+    PENDING = "pending"
+    ACTIVE = "active"
+    SOLD = "sold"
+    RENTED = "rented"
+    WITHDRAWN = "withdrawn"
+
+
+class PropertyTypeEnum(str, Enum):
+    HOUSE = "house"
+    APARTMENT = "apartment"
+    CONDO = "condo"
+    TOWNHOUSE = "townhouse"
+    LAND = "land"
+    COMMERCIAL = "commercial"
+    VILLA = "villa"
+
+
+class InquiryStatusEnum(str, Enum):
+    NEW = "new"
+    READ = "read"
+    RESPONDED = "responded"
+    CLOSED = "closed"
+
+
+# Base schemas
+class BaseConfig:
+    from_attributes = True
+    json_encoders = {
+        datetime: lambda v: v.isoformat() if v else None
+    }
+
+
+# User Schemas
+class UserBase(BaseModel):
+    email: EmailStr
+    first_name: str = Field(..., min_length=1, max_length=100)
+    last_name: str = Field(..., min_length=1, max_length=100)
+    phone: Optional[str] = Field(None, max_length=20)
+    role: UserRoleEnum = UserRoleEnum.BUYER
+
+    class Config(BaseConfig):
+        pass
+
+
+class UserCreate(UserBase):
+    password: str = Field(..., min_length=8, max_length=100)
+
+
+class UserUpdate(BaseModel):
+    first_name: Optional[str] = Field(None, min_length=1, max_length=100)
+    last_name: Optional[str] = Field(None, min_length=1, max_length=100)
+    phone: Optional[str] = Field(None, max_length=20)
+    avatar_url: Optional[str] = Field(None, max_length=500)
+
+
+class UserResponse(UserBase):
+    id: int
+    is_active: bool
+    is_verified: bool
+    avatar_url: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+    last_login: Optional[datetime]
+
+    class Config(BaseConfig):
+        pass
+
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
+
+
+class TokenData(BaseModel):
+    user_id: Optional[int] = None
+    email: Optional[str] = None
+    role: Optional[str] = None
+
+
+# Address Schemas
+class AddressBase(BaseModel):
+    street_address: str = Field(..., min_length=1, max_length=255)
+    street_address_2: Optional[str] = Field(None, max_length=255)
+    city: str = Field(..., min_length=1, max_length=100)
+    state: str = Field(..., min_length=1, max_length=100)
+    postal_code: str = Field(..., min_length=1, max_length=20)
+    country: str = Field(default="United States", max_length=100)
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+    class Config(BaseConfig):
+        pass
+
+
+class AddressCreate(AddressBase):
+    pass
+
+
+class AddressUpdate(BaseModel):
+    street_address: Optional[str] = Field(None, min_length=1, max_length=255)
+    street_address_2: Optional[str] = Field(None, max_length=255)
+    city: Optional[str] = Field(None, min_length=1, max_length=100)
+    state: Optional[str] = Field(None, min_length=1, max_length=100)
+    postal_code: Optional[str] = Field(None, min_length=1, max_length=20)
+    country: Optional[str] = Field(None, max_length=100)
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+
+class AddressResponse(AddressBase):
+    id: int
+    property_id: int
+    formatted_address: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+    class Config(BaseConfig):
+        pass
+
+
+# Property Image Schemas
+class PropertyImageBase(BaseModel):
+    image_url: str = Field(..., max_length=500)
+    thumbnail_url: Optional[str] = Field(None, max_length=500)
+    caption: Optional[str] = Field(None, max_length=255)
+    is_primary: bool = False
+    order: int = 0
+
+    class Config(BaseConfig):
+        pass
+
+
+class PropertyImageCreate(PropertyImageBase):
+    pass
+
+
+class PropertyImageUpdate(BaseModel):
+    image_url: Optional[str] = Field(None, max_length=500)
+    thumbnail_url: Optional[str] = Field(None, max_length=500)
+    caption: Optional[str] = Field(None, max_length=255)
+    is_primary: Optional[bool] = None
+    order: Optional[int] = None
+
+
+class PropertyImageResponse(PropertyImageBase):
+    id: int
+    property_id: int
+    width: Optional[int]
+    height: Optional[int]
+    file_size: Optional[int]
+    created_at: datetime
+
+    class Config(BaseConfig):
+        pass
+
+
+# Property Feature Schemas
+class PropertyFeatureBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    category: Optional[str] = Field(None, max_length=50)
+    icon: Optional[str] = Field(None, max_length=50)
+    description: Optional[str] = Field(None, max_length=255)
+
+    class Config(BaseConfig):
+        pass
+
+
+class PropertyFeatureCreate(PropertyFeatureBase):
+    pass
+
+
+class PropertyFeatureUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    category: Optional[str] = Field(None, max_length=50)
+    icon: Optional[str] = Field(None, max_length=50)
+    description: Optional[str] = Field(None, max_length=255)
+
+
+class PropertyFeatureResponse(PropertyFeatureBase):
+    id: int
+    created_at: datetime
+
+    class Config(BaseConfig):
+        pass
+
+
+# Property Schemas
+class PropertyBase(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+    property_type: PropertyTypeEnum
+    status: PropertyStatusEnum = PropertyStatusEnum.DRAFT
+    price: float = Field(..., gt=0)
+    price_per_sqft: Optional[float] = None
+    price_type: str = Field(default="sale", pattern="^(sale|rent|lease)$")
+    bedrooms: int = Field(default=0, ge=0)
+    bathrooms: float = Field(default=0, ge=0)
+    half_bathrooms: int = Field(default=0, ge=0)
+    square_feet: Optional[int] = Field(None, ge=0)
+    lot_size: Optional[float] = Field(None, ge=0)
+    year_built: Optional[int] = Field(None, ge=1800, le=2100)
+    parking_spaces: int = Field(default=0, ge=0)
+    garage_spaces: int = Field(default=0, ge=0)
+    stories: int = Field(default=1, ge=1)
+    hoa_fee: float = Field(default=0, ge=0)
+    tax_amount: Optional[float] = Field(None, ge=0)
+    is_featured: bool = False
+    is_new_construction: bool = False
+    is_foreclosure: bool = False
+
+    class Config(BaseConfig):
+        pass
+
+    @validator('year_built')
+    def validate_year_built(cls, v):
+        if v is not None and (v < 1800 or v > 2100):
+            raise ValueError('Year built must be between 1800 and 2100')
+        return v
+
+
+class PropertyCreate(PropertyBase):
+    address: AddressCreate
+    images: Optional[List[PropertyImageCreate]] = None
+    feature_ids: Optional[List[int]] = None
+    agent_id: Optional[int] = None
+    agency_id: Optional[int] = None
+
+
+class PropertyUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=255)
+    description: Optional[str] = None
+    property_type: Optional[PropertyTypeEnum] = None
+    status: Optional[PropertyStatusEnum] = None
+    price: Optional[float] = Field(None, gt=0)
+    price_per_sqft: Optional[float] = None
+    price_type: Optional[str] = Field(None, pattern="^(sale|rent|lease)$")
+    bedrooms: Optional[int] = Field(None, ge=0)
+    bathrooms: Optional[float] = Field(None, ge=0)
+    half_bathrooms: Optional[int] = Field(None, ge=0)
+    square_feet: Optional[int] = Field(None, ge=0)
+    lot_size: Optional[float] = Field(None, ge=0)
+    year_built: Optional[int] = Field(None, ge=1800, le=2100)
+    parking_spaces: Optional[int] = Field(None, ge=0)
+    garage_spaces: Optional[int] = Field(None, ge=0)
+    stories: Optional[int] = Field(None, ge=1)
+    hoa_fee: Optional[float] = Field(None, ge=0)
+    tax_amount: Optional[float] = Field(None, ge=0)
+    is_featured: Optional[bool] = None
+    is_new_construction: Optional[bool] = None
+    is_foreclosure: Optional[bool] = None
+    agent_id: Optional[int] = None
+    agency_id: Optional[int] = None
+
+
+class PropertyResponse(PropertyBase):
+    id: int
+    owner_id: int
+    agent_id: Optional[int]
+    agency_id: Optional[int]
+    view_count: int
+    favorite_count: int
+    inquiry_count: int
+    listed_at: Optional[datetime]
+    sold_at: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
+    address: Optional[AddressResponse] = None
+    images: List[PropertyImageResponse] = []
+    features: List[PropertyFeatureResponse] = []
+
+    class Config(BaseConfig):
+        pass
+
+
+class PropertyListResponse(BaseModel):
+    id: int
+    title: str
+    property_type: PropertyTypeEnum
+    status: PropertyStatusEnum
+    price: float
+    bedrooms: int
+    bathrooms: float
+    square_feet: Optional[int]
+    is_featured: bool
+    created_at: datetime
+    primary_image: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+
+    class Config(BaseConfig):
+        pass
+
+
+# Favorite Schemas
+class FavoriteBase(BaseModel):
+    property_id: int
+    notes: Optional[str] = None
+
+    class Config(BaseConfig):
+        pass
+
+
+class FavoriteCreate(FavoriteBase):
+    pass
+
+
+class FavoriteUpdate(BaseModel):
+    notes: Optional[str] = None
+
+
+class FavoriteResponse(FavoriteBase):
+    id: int
+    user_id: int
+    created_at: datetime
+    property: Optional[PropertyListResponse] = None
+
+    class Config(BaseConfig):
+        pass
+
+
+# Inquiry Schemas
+class InquiryBase(BaseModel):
+    subject: str = Field(..., min_length=1, max_length=255)
+    message: str = Field(..., min_length=1)
+    contact_phone: Optional[str] = Field(None, max_length=20)
+    contact_email: Optional[EmailStr] = None
+    preferred_contact_method: str = Field(default="email", pattern="^(email|phone|text)$")
+
+    class Config(BaseConfig):
+        pass
+
+
+class InquiryCreate(InquiryBase):
+    property_id: Optional[int] = None
+    receiver_id: int
+    is_property_inquiry: bool = True
+
+
+class InquiryUpdate(BaseModel):
+    subject: Optional[str] = Field(None, min_length=1, max_length=255)
+    message: Optional[str] = Field(None, min_length=1)
+    status: Optional[InquiryStatusEnum] = None
+    response: Optional[str] = None
+    contact_phone: Optional[str] = Field(None, max_length=20)
+    contact_email: Optional[EmailStr] = None
+    preferred_contact_method: Optional[str] = Field(None, pattern="^(email|phone|text)$")
+
+
+class InquiryResponse(InquiryBase):
+    id: int
+    property_id: Optional[int]
+    sender_id: int
+    receiver_id: int
+    status: InquiryStatusEnum
+    response: Optional[str]
+    responded_at: Optional[datetime]
+    is_property_inquiry: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config(BaseConfig):
+        pass
+
+
+# Review Schemas
+class ReviewBase(BaseModel):
+    rating: int = Field(..., ge=1, le=5)
+    title: Optional[str] = Field(None, max_length=255)
+    comment: Optional[str] = None
+    is_verified_transaction: bool = False
+
+    class Config(BaseConfig):
+        pass
+
+    @validator('rating')
+    def validate_rating(cls, v):
+        if v < 1 or v > 5:
+            raise ValueError('Rating must be between 1 and 5')
+        return v
+
+
+class ReviewCreate(ReviewBase):
+    reviewed_user_id: int
+
+
+class ReviewUpdate(BaseModel):
+    rating: Optional[int] = Field(None, ge=1, le=5)
+    title: Optional[str] = Field(None, max_length=255)
+    comment: Optional[str] = None
+    is_verified_transaction: Optional[bool] = None
+    is_approved: Optional[bool] = None
+
+
+class ReviewResponse(ReviewBase):
+    id: int
+    reviewer_id: int
+    reviewed_user_id: int
+    is_approved: bool
+    helpful_count: int
+    created_at: datetime
+    updated_at: datetime
+    reviewer_name: Optional[str] = None
+
+    class Config(BaseConfig):
+        pass
+
+
+# Agency Schemas
+class AgencyBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = None
+    logo_url: Optional[str] = Field(None, max_length=500)
+    website: Optional[str] = Field(None, max_length=255)
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = Field(None, max_length=20)
+    license_number: Optional[str] = Field(None, max_length=50)
+
+    class Config(BaseConfig):
+        pass
+
+
+class AgencyCreate(AgencyBase):
+    pass
+
+
+class AgencyUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    description: Optional[str] = None
+    logo_url: Optional[str] = Field(None, max_length=500)
+    website: Optional[str] = Field(None, max_length=255)
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = Field(None, max_length=20)
+    license_number: Optional[str] = Field(None, max_length=50)
+    is_verified: Optional[bool] = None
+
+
+class AgencyResponse(AgencyBase):
+    id: int
+    owner_id: Optional[int]
+    rating: float
+    total_reviews: int
+    is_verified: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config(BaseConfig):
+        pass
+
+
+# Agent Profile Schemas
+class AgentProfileBase(BaseModel):
+    license_number: Optional[str] = Field(None, max_length=50)
+    bio: Optional[str] = None
+    experience_years: int = Field(default=0, ge=0)
+    specializations: Optional[str] = Field(None, max_length=500)
+    languages: Optional[str] = Field(None, max_length=255)
+    service_areas: Optional[str] = Field(None, max_length=500)
+
+    class Config(BaseConfig):
+        pass
+
+
+class AgentProfileCreate(AgentProfileBase):
+    agency_id: Optional[int] = None
+
+
+class AgentProfileUpdate(BaseModel):
+    license_number: Optional[str] = Field(None, max_length=50)
+    bio: Optional[str] = None
+    experience_years: Optional[int] = Field(None, ge=0)
+    specializations: Optional[str] = Field(None, max_length=500)
+    languages: Optional[str] = Field(None, max_length=255)
+    service_areas: Optional[str] = Field(None, max_length=500)
+    agency_id: Optional[int] = None
+    is_featured: Optional[bool] = None
+
+
+class AgentProfileResponse(AgentProfileBase):
+    id: int
+    user_id: int
+    agency_id: Optional[int]
+    rating: float
+    total_reviews: int
+    total_sales: int
+    total_rentals: int
+    is_verified: bool
+    is_featured: bool
+    created_at: datetime
+    updated_at: datetime
+    user: Optional[UserResponse] = None
+    agency: Optional[AgencyResponse] = None
+
+    class Config(BaseConfig):
+        pass
+
+
+# Pagination and List Response Schemas
+class PaginatedResponse(BaseModel):
+    total: int
+    page: int
+    per_page: int
+    pages: int
+
+
+class PropertyPaginatedResponse(PaginatedResponse):
+    items: List[PropertyListResponse]
+
+
+class UserPaginatedResponse(PaginatedResponse):
+    items: List[UserResponse]
+
+
+class AgencyPaginatedResponse(PaginatedResponse):
+    items: List[AgencyResponse]
+
+
+class ReviewPaginatedResponse(PaginatedResponse):
+    items: List[ReviewResponse]
+
+
+class InquiryPaginatedResponse(PaginatedResponse):
+    items: List[InquiryResponse]
+
+
+# Search and Filter Schemas
+class PropertySearch(BaseModel):
+    query: Optional[str] = None
+    property_type: Optional[List[PropertyTypeEnum]] = None
+    status: Optional[List[PropertyStatusEnum]] = None
+    min_price: Optional[float] = None
+    max_price: Optional[float] = None
+    min_bedrooms: Optional[int] = None
+    max_bedrooms: Optional[int] = None
+    min_bathrooms: Optional[float] = None
+    max_bathrooms: Optional[float] = None
+    min_square_feet: Optional[int] = None
+    max_square_feet: Optional[int] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    is_featured: Optional[bool] = None
+    is_new_construction: Optional[bool] = None
+    sort_by: Optional[str] = Field(default="created_at", pattern="^(price|created_at|square_feet|bedrooms)$")
+    sort_order: Optional[str] = Field(default="desc", pattern="^(asc|desc)$")
+    page: int = Field(default=1, ge=1)
+    per_page: int = Field(default=20, ge=1, le=100)
+
+
+# Password Reset Schemas
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+
+class PasswordReset(BaseModel):
+    token: str
+    new_password: str = Field(..., min_length=8, max_length=100)
+
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=8, max_length=100)
+
+
+# Message/Response Schemas
+class Message(BaseModel):
+    message: str
+    success: bool = True
+
+
+class ErrorResponse(BaseModel):
+    detail: str
+    error_code: Optional[str] = None
+</file_text>
+</str_replace_editor>
+
+Now let me create the authentication module:
+
+<str_replace_editor>
+<command>create</command>
+<path>/workspace/backend/auth.py</path>
+<file_text>
+"""
+JWT Authentication with RBAC for Real Estate Marketplace
+"""
+from datetime import datetime, timedelta
+from typing import Optional, List
+from fastapi import Depends, HTTPException, status, Request
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, OAuth2PasswordBearer
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from sqlalchemy.orm import Session
+from functools import wraps
+
+from models import User, UserRole, get_db, Session as DbSession
+
+# Configuration
+SECRET_KEY = "your-secret-key-change-in-production-use-environment-variable"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
+REFRESH_TOKEN_EXPIRE_DAYS = 7
+
+# Password hashing
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# OAuth2 scheme for Swagger UI
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
+
+# Bearer token scheme
+bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def verify_password(
