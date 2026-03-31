@@ -91,7 +91,7 @@ _MIGRATIONS: dict[int, list[str]] = {
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now'))
         )""",
-        # Connectors (secrets stored encrypted or hashed — not plaintext)
+        # Connectors (config stored as JSON — sensitive values masked in API responses)
         """CREATE TABLE IF NOT EXISTS connectors (
             id TEXT PRIMARY KEY,
             user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -99,7 +99,7 @@ _MIGRATIONS: dict[int, list[str]] = {
             type TEXT NOT NULL,
             icon TEXT DEFAULT '',
             status TEXT DEFAULT 'disconnected',
-            config_encrypted TEXT DEFAULT '{}',
+            config_json TEXT DEFAULT '{}',
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now'))
         )""",

@@ -31,7 +31,7 @@ class ConnectorUpdate(BaseModel):
 def _row_to_dict(r) -> dict:
     config = {}
     try:
-        config = json.loads(r["config_encrypted"]) if r["config_encrypted"] else {}
+        config = json.loads(r["config_json"]) if r["config_json"] else {}
     except (json.JSONDecodeError, TypeError):
         config = {}
     # Mask sensitive values in response
@@ -58,7 +58,7 @@ def _row_to_dict(r) -> dict:
 async def list_connectors(user: TokenPayload = Depends(require_auth)) -> JSONResponse:
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT id, name, type, icon, status, config_encrypted, created_at, updated_at "
+            "SELECT id, name, type, icon, status, config_json, created_at, updated_at "
             "FROM connectors WHERE user_id = ? ORDER BY created_at",
             (user.user_id,),
         ).fetchall()
@@ -73,7 +73,7 @@ async def create_connector(
     config_json = json.dumps(body.config)
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO connectors (id, user_id, name, type, icon, status, config_encrypted) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO connectors (id, user_id, name, type, icon, status, config_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (connector_id, user.user_id, body.name, body.type, body.icon, body.status, config_json),
         )
     return JSONResponse(status_code=201, content={
@@ -87,7 +87,7 @@ async def update_connector(
 ) -> JSONResponse:
     with get_db() as conn:
         existing = conn.execute(
-            "SELECT id, config_encrypted FROM connectors WHERE id = ? AND user_id = ?",
+            "SELECT id, config_json FROM connectors WHERE id = ? AND user_id = ?",
             (connector_id, user.user_id),
         ).fetchone()
         if not existing:
@@ -104,11 +104,11 @@ async def update_connector(
         if body.config is not None:
             # Merge with existing config (preserve values not sent)
             try:
-                old_config = json.loads(existing["config_encrypted"]) if existing["config_encrypted"] else {}
+                old_config = json.loads(existing["config_json"]) if existing["config_json"] else {}
             except (json.JSONDecodeError, TypeError):
                 old_config = {}
             merged = {**old_config, **body.config}
-            updates.append("config_encrypted = ?")
+            updates.append("config_json = ?")
             params.append(json.dumps(merged))
         if updates:
             updates.append("updated_at = datetime('now')")
@@ -120,7 +120,7 @@ async def update_connector(
             )
 
         row = conn.execute(
-            "SELECT id, name, type, icon, status, config_encrypted, created_at, updated_at "
+            "SELECT id, name, type, icon, status, config_json, created_at, updated_at "
             "FROM connectors WHERE id = ?",
             (connector_id,),
         ).fetchone()
@@ -140,7 +140,7 @@ async def disconnect_connector(
             return JSONResponse(status_code=404, content={"error": "Connector not found"})
         # Clear config and set status to disconnected
         conn.execute(
-            "UPDATE connectors SET status = 'disconnected', config_encrypted = '{}', updated_at = datetime('now') WHERE id = ?",
+            "UPDATE connectors SET status = 'disconnected', config_json = '{}', updated_at = datetime('now') WHERE id = ?",
             (connector_id,),
         )
     return JSONResponse(content={"disconnected": True})

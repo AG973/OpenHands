@@ -137,7 +137,7 @@ async def list_uploads(
 async def get_upload(
     file_id: str,
     user: TokenPayload = Depends(require_auth),
-) -> JSONResponse:
+):
     from fastapi.responses import FileResponse
 
     with get_db() as conn:
