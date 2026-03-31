@@ -18,7 +18,7 @@ def normalize_model_name(model: str) -> str:
     - Trim whitespace
     - Lowercase
     - If there is a '/', keep only the basename after the last '/'
-      (handles prefixes like openrouter/, litellm_proxy/, anthropic/, etc.)
+      (handles prefixes like openrouter/, anthropic/, etc.)
       and treat ':' inside that basename as an Ollama-style variant tag to be removed
     - There is no provider:model form; providers, when present, use 'provider/model'
     - Drop a trailing "-gguf" suffix if present
@@ -98,7 +98,7 @@ FUNCTION_CALLING_PATTERNS: list[str] = [
     'qwen3-coder-480b-a35b-instruct',
     'deepseek-chat',
     'grok-code-fast-1',
-    # GLM series - verified via official docs and litellm config
+    # GLM series - verified via official docs
     'glm-4*',
     'glm-5*',
 ]
@@ -122,9 +122,9 @@ REASONING_EFFORT_PATTERNS: list[str] = [
     'claude-sonnet-4-5*',
     'claude-sonnet-4-6*',
     'claude-haiku-4-5*',
-    # Kimi series - verified via litellm config
+    # Kimi series
     'kimi-k2.5',
-    # GLM series - verified via litellm config
+    # GLM series
     'glm-4*',
     'glm-5*',
 ]
@@ -141,9 +141,9 @@ PROMPT_CACHE_PATTERNS: list[str] = [
     'claude-sonnet-4*',
     'claude-opus-4*',
     'gemini-3.1-pro*',
-    # Kimi series - verified via litellm config
+    # Kimi series
     'kimi-k2.5',
-    # GLM series - verified via litellm config
+    # GLM series
     'glm-4*',
     'glm-5*',
 ]
