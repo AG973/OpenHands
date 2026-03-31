@@ -94,11 +94,20 @@ _SAFE_NAME_RE = re.compile(r'^[a-zA-Z0-9_.-]+$')
 _SAFE_PORT_RE = re.compile(r'^[0-9]{1,5}$')
 
 
+# Only allow deploy operations within these base directories
+_ALLOWED_DEPLOY_BASES = ["/root/workspace", "/home", "/var/www", "/opt", "/tmp"]
+
+
 def _validate_path(value: str, field: str) -> str:
     if not _SAFE_PATH_RE.match(value):
         raise ValueError(f"Invalid characters in {field}: {value!r}")
     if '..' in value:
         raise ValueError(f"Path traversal not allowed in {field}")
+    # Restrict to allowed base directories to prevent destructive operations on system paths
+    if not any(value.startswith(base) for base in _ALLOWED_DEPLOY_BASES):
+        raise ValueError(
+            f"{field} must be under one of: {', '.join(_ALLOWED_DEPLOY_BASES)}. Got: {value!r}"
+        )
     return value
 
 

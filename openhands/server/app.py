@@ -85,13 +85,18 @@ app = FastAPI(
 
 
 # CORS middleware for CODEIT custom frontend (dev + production)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Tighten in production via CODEIT_CORS_ORIGINS env var
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Set CODEIT_CORS_ORIGINS=http://your-frontend:5173,http://your-domain to restrict in production
+import os as _os
+_cors_origins_raw = _os.environ.get("CODEIT_CORS_ORIGINS", "")
+_cors_origins = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()] if _cors_origins_raw else []
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 @app.exception_handler(AuthenticationError)

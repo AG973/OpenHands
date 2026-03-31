@@ -107,7 +107,12 @@ async def update_connector(
                 old_config = json.loads(existing["config_json"]) if existing["config_json"] else {}
             except (json.JSONDecodeError, TypeError):
                 old_config = {}
-            merged = {**old_config, **body.config}
+            # Filter out masked values (e.g. "***1234") to prevent overwriting real secrets
+            clean_config = {
+                k: v for k, v in body.config.items()
+                if not (isinstance(v, str) and v.startswith("***"))
+            }
+            merged = {**old_config, **clean_config}
             updates.append("config_json = ?")
             params.append(json.dumps(merged))
         if updates:
