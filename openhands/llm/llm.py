@@ -141,13 +141,14 @@ class LLM(RetryMixin, DebugMixin):
             # openai doesn't expose top_p, but litellm does
             kwargs['top_p'] = self.config.top_p
 
-        # Handle OpenHands provider - rewrite to litellm_proxy
+        # Handle OpenHands provider prefix — strip it and use the model name directly.
+        # Previously this rewrote to litellm_proxy/ (paid cloud proxy). Now it just
+        # passes the bare model name through so litellm routes it normally.
         if self.config.model.startswith('openhands/'):
             model_name = self.config.model.removeprefix('openhands/')
-            self.config.model = f'litellm_proxy/{model_name}'
-            self.config.base_url = _get_openhands_llm_base_url()
+            self.config.model = model_name
             logger.debug(
-                f'Rewrote openhands/{model_name} to {self.config.model} with base URL {self.config.base_url}'
+                f'Stripped openhands/ prefix → using model {self.config.model} directly'
             )
 
         features = get_features(self.config.model)
@@ -341,9 +342,8 @@ class LLM(RetryMixin, DebugMixin):
             # NOTE: this setting is global; unlike drop_params, it cannot be overridden in the litellm completion partial
             litellm.modify_params = self.config.modify_params
 
-            # if we're not using litellm proxy, remove the extra_body
-            if 'litellm_proxy' not in self.config.model:
-                kwargs.pop('extra_body', None)
+            # Remove extra_body — only needed by the paid litellm proxy (removed)
+            kwargs.pop('extra_body', None)
 
             # Record start time for latency measurement
             start_time = time.time()
@@ -574,42 +574,8 @@ class LLM(RetryMixin, DebugMixin):
         except Exception as e:
             logger.debug(f'Error getting model info: {e}')
 
-        if self.config.model.startswith('litellm_proxy/'):
-            # IF we are using LiteLLM proxy, get model info from LiteLLM proxy
-            # GET {base_url}/v1/model/info with litellm_model_id as path param
-            base_url = self.config.base_url.strip() if self.config.base_url else ''
-            if not base_url.startswith(('http://', 'https://')):
-                base_url = 'http://' + base_url
-
-            response = httpx.get(
-                f'{base_url}/v1/model/info',
-                headers={
-                    'Authorization': f'Bearer {self.config.api_key.get_secret_value() if self.config.api_key else None}'
-                },
-            )
-
-            try:
-                resp_json = response.json()
-                if 'data' not in resp_json:
-                    logger.info(
-                        f'No data field in model info response from LiteLLM proxy: {resp_json}'
-                    )
-                all_model_info = resp_json.get('data', [])
-            except Exception as e:
-                logger.info(f'Error parsing JSON response from LiteLLM proxy: {e}')
-                all_model_info = []
-            current_model_info = next(
-                (
-                    info
-                    for info in all_model_info
-                    if info['model_name']
-                    == self.config.model.removeprefix('litellm_proxy/')
-                ),
-                None,
-            )
-            if current_model_info:
-                self.model_info = current_model_info['model_info']
-                logger.debug(f'Got model info from litellm proxy: {self.model_info}')
+        # Paid litellm_proxy/ model info lookup removed — no longer needed.
+        # Model info is now resolved locally via litellm.get_model_info().
 
         # Last two attempts to get model info from NAME
         if not self.model_info:
@@ -692,7 +658,6 @@ class LLM(RetryMixin, DebugMixin):
         Returns:
             bool: True if model is vision capable. Return False if model not supported by litellm.
         """
-
         # Allow manual override via environment variable
         if os.getenv('OPENHANDS_FORCE_VISION', '').lower() in (
             '1',
@@ -983,15 +948,15 @@ class LLM(RetryMixin, DebugMixin):
 
 
 def _get_openhands_llm_base_url():
-    # Get the API url if specified
+    """Get the LLM base URL from environment.
+
+    Previously defaulted to paid AllHands proxy (llm-proxy.app.all-hands.dev).
+    Now requires explicit configuration via LITE_LLM_API_URL env var.
+    For local Ollama, set LITE_LLM_API_URL=http://localhost:11434
+    """
     lite_llm_api_url = os.getenv('LITE_LLM_API_URL')
     if lite_llm_api_url:
         return lite_llm_api_url
 
-    # Fallback to using web_host.
-    web_host = os.getenv('WEB_HOST')
-    if web_host and ('.staging.' in web_host or web_host.startswith('staging')):
-        return 'https://llm-proxy.staging.all-hands.dev/'
-
-    # Use the default
-    return 'https://llm-proxy.app.all-hands.dev/'
+    # Default to local Ollama instead of paid cloud proxy
+    return 'http://localhost:11434'

@@ -20,7 +20,7 @@ ROLE_OWNER = 'owner'
 ROLE_ADMIN = 'admin'
 ROLE_MEMBER = 'member'
 
-# Deprecated - billing margins are now handled internally in litellm
+# Deprecated - billing margins were handled by the paid litellm proxy (removed)
 DEFAULT_BILLING_MARGIN = float(os.environ.get('DEFAULT_BILLING_MARGIN', '1.0'))
 
 # Map of user settings versions to their corresponding default LLM models
@@ -42,7 +42,7 @@ ORG_SETTINGS_VERSION = max(PERSONAL_WORKSPACE_VERSION_TO_MODEL.keys())
 PERSONAL_WORKSPACE_VERSION = max(PERSONAL_WORKSPACE_VERSION_TO_MODEL.keys())
 
 LITE_LLM_API_URL = os.environ.get(
-    'LITE_LLM_API_URL', 'https://llm-proxy.app.all-hands.dev'
+    'LITE_LLM_API_URL', None
 )
 LITE_LLM_TEAM_ID = os.environ.get('LITE_LLM_TEAM_ID', None)
 LITE_LLM_API_KEY = os.environ.get('LITE_LLM_API_KEY', None)
@@ -82,23 +82,25 @@ DEFAULT_V1_ENABLED = os.getenv('DEFAULT_V1_ENABLED', '1').lower() in ('1', 'true
 
 
 def build_litellm_proxy_model_path(model_name: str) -> str:
-    """Build the LiteLLM proxy model path based on model name.
+    """Build the model path. Previously prefixed with litellm_proxy/ for paid proxy.
+
+    Now returns the model name directly since the paid proxy has been removed.
 
     Args:
         model_name: The base model name (e.g., 'claude-3-7-sonnet-20250219')
 
     Returns:
-        The full LiteLLM proxy model path (e.g., 'litellm_proxy/claude-3-7-sonnet-20250219')
+        The model name as-is (paid proxy prefix removed)
     """
     if 'litellm' in model_name:
         raise ValueError("Only include model name, don't include prefix")
 
-    return 'litellm_proxy/' + model_name
+    return model_name
 
 
 def get_default_litellm_model():
-    """Construct proxy for litellm model based on user settings if not set explicitly."""
+    """Get the default model. Previously routed through paid proxy."""
     if LITELLM_DEFAULT_MODEL:
         return LITELLM_DEFAULT_MODEL
     model = PERSONAL_WORKSPACE_VERSION_TO_MODEL[PERSONAL_WORKSPACE_VERSION]
-    return build_litellm_proxy_model_path(model)
+    return model
