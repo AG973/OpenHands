@@ -34,7 +34,7 @@ from openhands.storage.settings.settings_store import SettingsStore
 from openhands.utils.llm import get_provider_api_base, is_openhands_model
 
 LITE_LLM_API_URL = os.environ.get(
-    'LITE_LLM_API_URL', 'https://llm-proxy.app.all-hands.dev'
+    'LITE_LLM_API_URL', None
 )
 
 app = APIRouter(prefix='/api', dependencies=get_dependencies())
@@ -127,8 +127,8 @@ async def store_llm_settings(
             # Not provided at all (e.g. MCP config save) - preserve existing or auto-detect
             if existing_settings.llm_base_url:
                 settings.llm_base_url = existing_settings.llm_base_url
-            elif is_openhands_model(settings.llm_model):
-                # OpenHands models use the LiteLLM proxy
+            elif is_openhands_model(settings.llm_model) and LITE_LLM_API_URL:
+                # OpenHands models use the configured LLM endpoint (if set)
                 settings.llm_base_url = LITE_LLM_API_URL
             elif settings.llm_model:
                 # For non-openhands models, try to get URL from litellm
