@@ -21,7 +21,8 @@ HOST_IP="localhost"
 if command -v tailscale >/dev/null 2>&1; then
   TS_IP=$(tailscale ip -4 2>/dev/null || true)
   [ -n "$TS_IP" ] && HOST_IP="$TS_IP"
-elif command -v hostname >/dev/null 2>&1; then
+fi
+if [ "$HOST_IP" = "localhost" ] && command -v hostname >/dev/null 2>&1; then
   LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
   [ -n "$LAN_IP" ] && HOST_IP="$LAN_IP"
 fi
