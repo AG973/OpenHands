@@ -85,13 +85,27 @@ else
   echo "  All present. Skipping."
 fi
 
-# ---- Step 4: Check npm serve ----
-echo "[4/7] Checking npm serve..."
+# ---- Step 4: Install frontend dependencies + build if needed ----
+echo "[4/7] Checking frontend..."
+cd "$UIDIR" || { echo "ERROR: Cannot cd to $UIDIR"; exit 1; }
+if [ ! -d "node_modules" ]; then
+  echo "  Installing npm dependencies (first run only, ~1 min)..."
+  npm ci 2>&1 | tail -3
+  echo "  Done."
+else
+  echo "  node_modules present."
+fi
+if [ ! -d "dist" ]; then
+  echo "  Building frontend (first run only, ~30s)..."
+  npm run build 2>&1 | tail -5
+  echo "  Done."
+else
+  echo "  dist/ present."
+fi
+# Ensure serve is available for hosting
 if ! command -v serve >/dev/null 2>&1 && ! npx serve --help >/dev/null 2>&1; then
   echo "  Installing serve..."
   npm install -g serve 2>&1 | tail -2
-else
-  echo "  Already available."
 fi
 
 # ---- Step 5: Check Docker runtime image ----
@@ -160,10 +174,6 @@ done
 
 # Frontend
 cd "$UIDIR" || { echo "ERROR: Cannot cd to $UIDIR"; exit 1; }
-if [ ! -d "dist" ]; then
-  echo "  ERROR: $UIDIR/dist/ not found."
-  exit 1
-fi
 nohup npx serve dist -p $FRONTEND_PORT -s > "$LOG_FRONTEND" 2>&1 &
 FRONTEND_PID=$!
 echo "  Frontend PID: $FRONTEND_PID"
