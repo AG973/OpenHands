@@ -1,0 +1,17 @@
+[Unit]
+Description=Ollama LLM Server (for CODEIT)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/ollama serve
+Environment=OLLAMA_HOST=0.0.0.0
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=codeit-ollama
+
+[Install]
+WantedBy=multi-user.target

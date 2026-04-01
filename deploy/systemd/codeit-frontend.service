@@ -1,0 +1,17 @@
+[Unit]
+Description=CODEIT Frontend (Static file server)
+After=network.target codeit-backend.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/OpenHands/codeit-ui
+ExecStart=/usr/bin/npx serve dist -p 8080 -s
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=codeit-frontend
+
+[Install]
+WantedBy=multi-user.target

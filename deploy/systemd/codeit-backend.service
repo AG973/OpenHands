@@ -1,0 +1,23 @@
+[Unit]
+Description=CODEIT Backend (OpenHands API Server)
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/OpenHands
+Environment=SERVE_FRONTEND=false
+Environment=LLM_NATIVE_TOOL_CALLING=false
+Environment=WORKSPACE_BASE=/root/workspace
+# LLM settings — override in /etc/codeit/env or via drop-in
+EnvironmentFile=-/etc/codeit/env
+ExecStart=/usr/bin/python3 -m uvicorn openhands.server.listen:app --host 0.0.0.0 --port 3000
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=codeit-backend
+
+[Install]
+WantedBy=multi-user.target
