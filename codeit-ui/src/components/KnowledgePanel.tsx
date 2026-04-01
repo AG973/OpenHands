@@ -2,8 +2,7 @@ import { useState, useEffect } from 'react'
 import { Brain, Plus, Save, Edit3, Trash, Search, Loader2 } from 'lucide-react'
 import * as codeitApi from '../services/codeitApi'
 import { emitLog } from '../utils/logger'
-
-interface KnowledgeItem { id: string; title: string; content: string; tags: string[]; updated_at: string }
+import type { KnowledgeItem } from '../types/codeit'
 
 export function KnowledgePanel() {
   const [items, setItems] = useState<KnowledgeItem[]>([])
