@@ -60,6 +60,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
     setModel(m.id)
     setBaseUrl(m.base_url)
     if (!m.requires_key) setApiKey('local-llm')
+    else if (apiKey === 'local-llm') setApiKey('')
     setDropdownOpen(false)
     setCustomModel(false)
   }
