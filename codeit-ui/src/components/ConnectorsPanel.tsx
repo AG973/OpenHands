@@ -5,8 +5,7 @@ import {
 } from 'lucide-react'
 import * as codeitApi from '../services/codeitApi'
 import { emitLog } from '../utils/logger'
-
-interface ConnectorItem { id: string; name: string; type: string; icon: string; status: 'connected' | 'disconnected' | 'error'; config: Record<string, string> }
+import type { ConnectorItem } from '../types/codeit'
 
 export function ConnectorsPanel() {
   const [connectors, setConnectors] = useState<ConnectorItem[]>([])
@@ -19,7 +18,7 @@ export function ConnectorsPanel() {
   useEffect(() => {
     codeitApi.listConnectors().then(data => {
       if (data.length === 0) {
-        const defaults = [
+        const defaults: Array<{ name: string; type: string; icon: string; config: Record<string, string> }> = [
           { name: 'GitHub', type: 'github', icon: 'github', config: { token: '', org: '', default_branch: 'main' } },
           { name: 'Discord', type: 'discord', icon: 'discord', config: { bot_token: '', server_id: '', channel_id: '' } },
           { name: 'AWS', type: 'aws', icon: 'aws', config: { access_key: '', secret_key: '', region: 'us-east-1' } },

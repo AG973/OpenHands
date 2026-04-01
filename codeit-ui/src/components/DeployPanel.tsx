@@ -15,7 +15,7 @@ export function DeployPanel({ onDeploy }: { onDeploy?: (msg: string) => void }) 
     { id: 'custom', name: 'Custom Server', desc: 'Deploy via SSH to any remote server', icon: <Globe className="w-5 h-5" />, status: 'needs_config' as const, cmd: 'Deploy my app to my custom server via SSH' },
   ]
   const [deploying, setDeploying] = useState<string | null>(null)
-  const [jobs, setJobs] = useState<Array<{ id: string; target: string; status: string; created_at?: string }>>([])
+  const [_jobs, setJobs] = useState<Array<{ id: string; target: string; status: string; created_at?: string }>>([])
 
   useEffect(() => {
     codeitApi.listDeployJobs().then(data => setJobs(data)).catch(() => {})
