@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OHDIR="${CODEIT_HOME:-$SCRIPT_DIR}"
 UIDIR="$OHDIR/codeit-ui"
 BACKEND_PORT="${CODEIT_BACKEND_PORT:-3000}"
-FRONTEND_PORT="${CODEIT_FRONTEND_PORT:-8080}"
+FRONTEND_PORT="${CODEIT_FRONTEND_PORT:-5173}"
 WORKSPACE="${CODEIT_WORKSPACE:-$HOME/workspace}"
 LOG_BACKEND="/tmp/openhands.log"
 LOG_FRONTEND="/tmp/codeit-ui.log"
@@ -37,6 +37,7 @@ echo "========================================="
 echo "[1/7] Stopping all existing processes, containers, and freeing ports..."
 pkill -9 -f "python.*openhands" 2>/dev/null || true
 pkill -9 -f "uvicorn.*openhands" 2>/dev/null || true
+pkill -9 -f "vite" 2>/dev/null || true
 pkill -9 -f "serve dist" 2>/dev/null || true
 pkill -9 -f "npx.*serve" 2>/dev/null || true
 for PORT in $BACKEND_PORT $FRONTEND_PORT; do
@@ -95,18 +96,7 @@ if [ ! -d "node_modules" ]; then
 else
   echo "  node_modules present."
 fi
-if [ ! -d "dist" ]; then
-  echo "  Building frontend (first run only, ~30s)..."
-  npm run build 2>&1 | tail -5
-  echo "  Done."
-else
-  echo "  dist/ present."
-fi
-# Ensure serve is available for hosting
-if ! command -v serve >/dev/null 2>&1 && ! npx serve --help >/dev/null 2>&1; then
-  echo "  Installing serve..."
-  npm install -g serve 2>&1 | tail -2
-fi
+echo "  Frontend ready."
 
 # ---- Step 5: Check Docker runtime image ----
 echo "[5/7] Checking Docker runtime image..."
@@ -172,12 +162,25 @@ for i in $(seq 1 90); do
   sleep 1
 done
 
-# Frontend
+# Frontend (Vite dev server — proxies /api/* and /socket.io/* to backend)
 cd "$UIDIR" || { echo "ERROR: Cannot cd to $UIDIR"; exit 1; }
-nohup npx serve dist -p $FRONTEND_PORT -s > "$LOG_FRONTEND" 2>&1 &
+export VITE_BACKEND_HOST="http://localhost:$BACKEND_PORT"
+nohup npm run dev -- --host 0.0.0.0 --port $FRONTEND_PORT > "$LOG_FRONTEND" 2>&1 &
 FRONTEND_PID=$!
-echo "  Frontend PID: $FRONTEND_PID"
-sleep 3
+echo "  Frontend PID: $FRONTEND_PID (Vite dev server with API proxy)"
+
+# Wait for frontend
+echo "  Waiting for frontend..."
+for j in $(seq 1 30); do
+  if curl -s "http://localhost:$FRONTEND_PORT" >/dev/null 2>&1; then
+    echo "  Frontend UP on port $FRONTEND_PORT (${j}s)"
+    break
+  fi
+  if [ "$j" -eq 30 ]; then
+    echo "  WARNING: Frontend may still be starting. Check: tail -f $LOG_FRONTEND"
+  fi
+  sleep 1
+done
 
 echo ""
 echo "========================================="
