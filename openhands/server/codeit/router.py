@@ -14,6 +14,7 @@ from openhands.server.codeit.routes_connectors import router as connectors_route
 from openhands.server.codeit.routes_deploy import router as deploy_router
 from openhands.server.codeit.routes_uploads import router as uploads_router
 from openhands.server.codeit.routes_health import router as health_router
+from openhands.server.codeit.routes_models import router as models_router
 
 
 def get_codeit_routers() -> list[APIRouter]:
@@ -34,4 +35,5 @@ def get_codeit_routers() -> list[APIRouter]:
         deploy_router,
         uploads_router,
         health_router,
+        models_router,
     ]
